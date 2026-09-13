@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -312,5 +313,135 @@ func TestResolveTemplateWithholdsControllerTokenFromConfigAuthoredEnv(t *testing
 		if strings.Contains(val, token) {
 			t.Errorf("Env[%s] = %q carries the controller token", key, val)
 		}
+	}
+}
+
+// OperatorEnv (ga-evj082) must carry exactly the operator-authored config
+// layers — workspace.Env, the resolved provider's Env, and agent.Env — with
+// the same last-wins override order as the main Env merge, so a resolved
+// config env change drives runtime.Config.OperatorEnv and lands on the
+// Launch-tier fingerprint instead of being a silent no-op. It must exclude
+// everything else that also flows into tp.Env: passthrough (host/controller
+// process env) and agentEnv (generated GC_* plumbing).
+func TestResolveTemplatePopulatesOperatorEnvFromOperatorAuthoredLayers(t *testing.T) {
+	cityPath := t.TempDir()
+	writeTemplateResolveCityConfig(t, cityPath, "file")
+
+	params := &agentBuildParams{
+		cityName: "city",
+		cityPath: cityPath,
+		workspace: &config.Workspace{
+			Provider: "test",
+			Env: map[string]string{
+				"WORKSPACE_VAR": "from-workspace",
+				"OVERRIDE_VAR":  "workspace-value",
+			},
+		},
+		providers: map[string]config.ProviderSpec{"test": {
+			Command:    "echo",
+			PromptMode: "none",
+			Env: map[string]string{
+				"PROVIDER_VAR": "from-provider",
+				"OVERRIDE_VAR": "provider-value",
+			},
+		}},
+		lookPath:   func(string) (string, error) { return "/bin/echo", nil },
+		fs:         fsys.OSFS{},
+		beaconTime: time.Unix(0, 0),
+		beadNames:  make(map[string]string),
+		stderr:     io.Discard,
+	}
+	agent := &config.Agent{
+		Name: "runner",
+		Env: map[string]string{
+			"AGENT_VAR":    "from-agent",
+			"OVERRIDE_VAR": "agent-value",
+		},
+	}
+
+	tp, err := resolveTemplate(params, agent, agent.QualifiedName(), nil)
+	if err != nil {
+		t.Fatalf("resolveTemplate: %v", err)
+	}
+
+	want := map[string]string{
+		"WORKSPACE_VAR": "from-workspace",
+		"PROVIDER_VAR":  "from-provider",
+		"AGENT_VAR":     "from-agent",
+		"OVERRIDE_VAR":  "agent-value", // agent layer wins, same order as the Env merge.
+	}
+	if !maps.Equal(tp.OperatorEnv, want) {
+		t.Errorf("OperatorEnv = %#v, want exactly %#v", tp.OperatorEnv, want)
+	}
+
+	// PATH is unconditionally passthrough-forwarded from the real process env
+	// (processenv.ProviderProcessPassthroughEnv) into tp.Env, but it is not
+	// operator-authored config and must not leak into OperatorEnv.
+	if _, ok := tp.Env["PATH"]; !ok {
+		t.Fatal("test invariant broken: expected passthrough PATH in tp.Env")
+	}
+	if _, ok := tp.OperatorEnv["PATH"]; ok {
+		t.Errorf("OperatorEnv[PATH] present, want excluded (passthrough, not operator-authored)")
+	}
+
+	// GC_BIN is agentEnv-generated plumbing, present in tp.Env but never
+	// operator-authored, and must not leak into OperatorEnv.
+	if _, ok := tp.Env["GC_BIN"]; !ok {
+		t.Fatal("test invariant broken: expected agentEnv-generated GC_BIN in tp.Env")
+	}
+	if _, ok := tp.OperatorEnv["GC_BIN"]; ok {
+		t.Errorf("OperatorEnv[GC_BIN] present, want excluded (agentEnv-generated, not operator-authored)")
+	}
+}
+
+// TestResolveTemplatePopulatesOperatorEnvWithExplicitProviderSelection covers
+// ga-evj082 acceptance criterion 3's second provider-selection path: an agent
+// that names its own provider (config.Agent.Provider) rather than falling
+// back to workspace.Provider. resolveTemplate only ever consumes the
+// already-resolved cfgAgent.Provider string (rig-patch composition happens
+// upstream in internal/config/compose.go before cfgAgent reaches here), so
+// this also stands in for the [[rigs.patches]].provider path.
+func TestResolveTemplatePopulatesOperatorEnvWithExplicitProviderSelection(t *testing.T) {
+	cityPath := t.TempDir()
+	writeTemplateResolveCityConfig(t, cityPath, "file")
+
+	params := &agentBuildParams{
+		cityName: "city",
+		cityPath: cityPath,
+		workspace: &config.Workspace{
+			Provider: "default-provider",
+			Env:      map[string]string{"WORKSPACE_VAR": "from-workspace"},
+		},
+		providers: map[string]config.ProviderSpec{
+			"default-provider": {
+				Command:    "echo",
+				PromptMode: "none",
+				Env:        map[string]string{"DEFAULT_PROVIDER_VAR": "should-not-appear"},
+			},
+			"explicit-provider": {
+				Command:    "echo",
+				PromptMode: "none",
+				Env:        map[string]string{"EXPLICIT_PROVIDER_VAR": "from-explicit-provider"},
+			},
+		},
+		lookPath:   func(string) (string, error) { return "/bin/echo", nil },
+		fs:         fsys.OSFS{},
+		beaconTime: time.Unix(0, 0),
+		beadNames:  make(map[string]string),
+		stderr:     io.Discard,
+	}
+	agent := &config.Agent{Name: "runner", Provider: "explicit-provider"}
+
+	tp, err := resolveTemplate(params, agent, agent.QualifiedName(), nil)
+	if err != nil {
+		t.Fatalf("resolveTemplate: %v", err)
+	}
+
+	want := map[string]string{
+		"WORKSPACE_VAR":         "from-workspace",
+		"EXPLICIT_PROVIDER_VAR": "from-explicit-provider",
+	}
+	if !maps.Equal(tp.OperatorEnv, want) {
+		t.Errorf("OperatorEnv = %#v, want exactly %#v", tp.OperatorEnv, want)
 	}
 }

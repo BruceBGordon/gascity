@@ -59,6 +59,13 @@ type TemplateParams struct {
 	Prompt string
 	// Env is the merged environment (passthrough + provider + agent + passthrough vars).
 	Env map[string]string
+	// OperatorEnv carries only the operator-authored environment layers —
+	// workspace.Env, the resolved provider's Env, and agent.Env — a subset
+	// of Env that excludes passthrough and generated agentEnv plumbing.
+	// Carried to runtime.Config.OperatorEnv (launch-tier fingerprint) so a
+	// resolved config env change drives a warm-box relaunch instead of a
+	// no-op.
+	OperatorEnv map[string]string
 	// Upstream is the selected model-serving endpoint name (a key in [upstreams],
 	// Phase C). Carried to runtime.Config.Upstream (launch-half fingerprint) so a
 	// switch relaunches the warm box; the resolved serving env is already merged
