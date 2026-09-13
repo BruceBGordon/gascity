@@ -489,6 +489,12 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 	processenv.PrependGCBinDirToPATH(env, env["GC_BIN"])
 	env = convergence.ScrubTokenEnv(env)
 
+	// OperatorEnv carries only the operator-authored layers (workspace,
+	// resolved provider, agent) — excluding passthrough and the generated
+	// agentEnv plumbing — so a resolved config env change fingerprints as
+	// Launch-tier identity instead of a no-op.
+	operatorEnv := mergeEnv(expandEnvMap(workspaceEnv), expandEnvMap(resolved.Env), expandEnvMap(cfgAgent.Env))
+
 	// Step 10b: Upstream axis (Phase C). Inject the selected upstream's serving
 	// env LAST so it is authoritative for the model-serving keys, and after
 	// ScrubTokenEnv so its credential refs survive — which is exactly why the
@@ -732,6 +738,7 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 		Command:          command,
 		Prompt:           prompt,
 		Env:              env,
+		OperatorEnv:      operatorEnv,
 		Upstream:         cfgAgent.Upstream,
 		Hints:            hints,
 		WorkDir:          workDir,
@@ -939,6 +946,7 @@ func templateParamsToConfigWithDelivery(tp TemplateParams) (runtime.Config, prom
 	cfg.PromptSuffix = promptSuffix
 	cfg.PromptFlag = promptFlag
 	cfg.Env = env
+	cfg.OperatorEnv = maps.Clone(tp.OperatorEnv)
 	if tp.IsACP {
 		cfg.MCPServers = tp.MCPServers
 	}
