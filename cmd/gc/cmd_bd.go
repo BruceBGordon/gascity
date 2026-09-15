@@ -518,6 +518,14 @@ func doBd(args []string, stdout, stderr io.Writer) int {
 	}
 
 	reapStaleBdExportJSONL(target.ScopeRoot)
+
+	if os.Getenv(assigneeGateEscapeEnv) == "" {
+		if err := checkBdAssigneeArgs(cfg, bdArgs, stderr); err != nil {
+			fmt.Fprintf(stderr, "gc bd: %v\n", err) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+	}
+
 	warnExternalBdOverrideDrift(stderr, cityPath, target)
 
 	// Resolve the same binary every other bd path in the tree resolves for
