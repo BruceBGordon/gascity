@@ -109,7 +109,15 @@ that assignee.
 
 gc bd forces BD_EXPORT_AUTO=false to prevent bd's git auto-export hook
 from wedging the wrapper after printing command output. If you need
-auto-export behavior, invoke bd directly.`,
+auto-export behavior, invoke bd directly.
+
+gc bd refuses a write that would set an assignee naming no configured
+agent or named session, because work assigned to a target that does not
+resolve is never picked up and nothing reports it. Set
+GC_ALLOW_UNRESOLVED_ASSIGNEE=1 to write it anyway; a false value (0,
+false, no, off) leaves the check on. The check is skipped when no agents
+resolve from the config at all, since that cannot distinguish an
+unroutable assignee from a config that failed to load.`,
 		Example: `  gc bd --rig my-project list
   gc bd --rig my-project create "New task"
   gc bd show my-project-abc          # auto-detects rig from bead prefix
@@ -519,7 +527,7 @@ func doBd(args []string, stdout, stderr io.Writer) int {
 
 	reapStaleBdExportJSONL(target.ScopeRoot)
 
-	if os.Getenv(assigneeGateEscapeEnv) == "" {
+	if !assigneeGateBypassed() {
 		if err := checkBdAssigneeArgs(cfg, bdArgs, stderr); err != nil {
 			fmt.Fprintf(stderr, "gc bd: %v\n", err) //nolint:errcheck // best-effort stderr
 			return 1

@@ -8,14 +8,17 @@ import (
 
 // configLoadCheck reports the deep config load that gates most of gc doctor.
 //
-// Roughly a dozen checks - config-valid, config-refs, pre-start-scripts, the
-// MCP checks, beads-store, v2-routed-to-namespace, session-model and
-// assignee-resolves - are registered only when this load succeeds. When it
-// fails they are not skipped with a message; they are never registered, so
-// they do not appear in the output at all and the summary line counts only
-// what did run. Measured on the ds-research city 2026-09-15: `gc doctor`
-// printed "26 passed, 2 warnings, 1 failed" with fourteen checks silently
-// absent, while the separate city-config check reported the file as loaded.
+// A block of config-dependent checks in cmd_doctor.go (beads-store,
+// v2-routed-to-namespace and assignee-resolves among them) is registered only
+// when this load succeeds. The exact membership moves as checks are added, so
+// do not read the list here as current; what does not move is the mechanism.
+// When the load fails those checks are not skipped with a message, they are
+// never registered, so they do not appear in the output at all and the summary
+// line counts only what did run.
+//
+// Observed once, on the ds-research city 2026-09-15: `gc doctor` printed
+// "26 passed, 2 warnings, 1 failed" with fourteen checks silently absent,
+// while the separate city-config check reported the file as loaded.
 //
 // A health report that omits its own omissions is the failure it exists to
 // catch, so the load result is now a check of its own.

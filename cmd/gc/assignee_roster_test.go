@@ -41,17 +41,17 @@ func TestAssigneeRosterAcceptsRoutableTargets(t *testing.T) {
 	roster := newAssigneeRoster(testRosterCity())
 
 	for _, assignee := range []string{
-		"",                   // unowned is a valid state
-		"goal-4-context",     // named session
-		"polecat",            // pool agent
-		"polecat-4",          // materialized pool instance
-		"city-infra-worker",  // agent
-		"human",              // a person
-		"mayor",              // reserved mailbox
-		"dr-toegp",           // session bead id
-		"gc-4cyi0a",          // session bead id
+		"",                          // unowned is a valid state
+		"goal-4-context",            // named session
+		"polecat",                   // pool agent
+		"polecat-4",                 // materialized pool instance
+		"city-infra-worker",         // agent
+		"human",                     // a person
+		"mayor",                     // reserved mailbox
+		"dr-toegp",                  // session bead id
+		"gc-4cyi0a",                 // session bead id
 		"claude-1-adhoc-6f649101fd", // runtime adhoc session
-		"claude-auto-2",      // runtime auto session
+		"claude-auto-2",             // runtime auto session
 	} {
 		if !roster.Resolves(assignee) {
 			t.Errorf("assignee %q did not resolve, want routable", assignee)
@@ -118,5 +118,84 @@ func TestCheckBdAssigneeArgsGate(t *testing.T) {
 	}
 	if err := checkBdAssigneeArgs(cfg, []string{"list", "--status", "open"}, nil); err != nil {
 		t.Fatalf("gate rejected a command that writes no assignee: %v", err)
+	}
+}
+
+// rosterCityWithPrefixes declares the bead ID prefixes the city issues, so the
+// roster can tell a session identity from a misspelled agent name.
+func rosterCityWithPrefixes() *config.City {
+	c := testRosterCity()
+	c.Workspace.Prefix = "gc"
+	c.Rigs = []config.Rig{{Name: "research", Path: "research", Prefix: "dr"}}
+	return c
+}
+
+// A session identity is named after a bead the city issued. Checking the shape
+// alone (2-4 letters, hyphen, alphanumerics) also matches an ordinary typo of
+// an agent name, which would wave through the exact error class this exists to
+// catch.
+func TestAssigneeRosterDistinguishesSessionIDsFromTypos(t *testing.T) {
+	roster := newAssigneeRoster(rosterCityWithPrefixes())
+
+	for _, assignee := range []string{"dr-huhn", "gc-818bx", "dr-a95w9", "repo-adhoc-1a2b3c", "worker-auto-7"} {
+		if !roster.Resolves(assignee) {
+			t.Errorf("runtime identity %q was rejected; a static roster cannot confirm these", assignee)
+		}
+	}
+	// Same shape, prefix the city never issues.
+	for _, assignee := range []string{"poly-cat1", "xy-1234", "abc-9999"} {
+		if roster.Resolves(assignee) {
+			t.Errorf("assignee %q resolved as a session identity, but no city prefix issues it", assignee)
+		}
+	}
+}
+
+// With no prefixes to check against there is nothing to be right about, so any
+// bead-shaped name is accepted. Same cannot-answer posture as Empty().
+func TestAssigneeRosterAcceptsAnyIDShapeWhenNoPrefixesDeclared(t *testing.T) {
+	c := &config.City{Agents: []config.Agent{{Name: "polecat"}}}
+	if !newAssigneeRoster(c).Resolves("poly-cat1") {
+		t.Error("bead-shaped name rejected although the city declares no prefixes")
+	}
+}
+
+// A pool instance is not always <agent>-<slot>: an agent declaring a namepool
+// materializes instances under the declared names, which share nothing with
+// the stem.
+func TestAssigneeRosterResolvesNamepoolInstances(t *testing.T) {
+	c := testRosterCity()
+	c.Agents = append(c.Agents, config.Agent{Name: "herder", NamepoolNames: []string{"rivet", "gasket"}})
+	roster := newAssigneeRoster(c)
+
+	for _, assignee := range []string{"rivet", "gasket", "herder-2"} {
+		if !roster.Resolves(assignee) {
+			t.Errorf("pool instance %q was rejected; it is routable", assignee)
+		}
+	}
+}
+
+func TestPositionalAssignArgSurvivesLeadingGlobalFlagValues(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"assign", "gc-1", "polecat"}, "polecat"},
+		{[]string{"--db", "/tmp/x.db", "assign", "gc-1", "polecat"}, "polecat"},
+		{[]string{"--db", "/tmp/x.db", "assign", "--force", "gc-1", "polecat"}, "polecat"},
+	} {
+		got, ok := positionalAssignArg(tc.args)
+		if !ok || got != tc.want {
+			t.Errorf("positionalAssignArg(%v) = (%q, %v), want (%q, true)", tc.args, got, ok, tc.want)
+		}
+	}
+	// Not the assign subcommand, so there is no positional assignee to take.
+	for _, args := range [][]string{
+		{"list", "-s", "open"},
+		{"update", "gc-1", "--assignee", "polecat"},
+		{"assign", "gc-1"},
+	} {
+		if got, ok := positionalAssignArg(args); ok {
+			t.Errorf("positionalAssignArg(%v) = (%q, true), want no positional assignee", args, got)
+		}
 	}
 }

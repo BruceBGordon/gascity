@@ -21,17 +21,26 @@ type assigneeRoster struct {
 	// poolStems holds agent names that materialize numbered pool instances,
 	// so "polecat-4" resolves via the stem "polecat".
 	poolStems map[string]struct{}
+	// idPrefixes holds the bead ID prefixes this city actually issues, taken
+	// from the HQ store and every rig. A runtime session identity is named
+	// after its session bead, so these are the only prefixes an opaque
+	// identity can legitimately carry.
+	idPrefixes map[string]struct{}
 }
 
-// poolInstanceSuffix matches the numbered (and optionally lettered) suffix the
-// reconciler appends to a pool agent name when it materializes an instance.
+// poolInstanceSuffix matches the numbered suffix poolInstanceName appends to a
+// pool agent name when it materializes an instance (`%s-%d`). The optional
+// trailing letter is not something that function produces; it is tolerated so
+// a hand-written variant resolves rather than reading as a phantom owner.
 var poolInstanceSuffix = regexp.MustCompile(`-\d+[a-z]?$`)
 
-// sessionIdentityShape matches the opaque identifiers the runtime assigns:
-// session bead IDs (dr-…, gc-…) and generated adhoc/auto session names. These
-// are legitimate assignees that exist only at runtime, so a static roster
+// generatedSessionShape matches the session names the runtime composes rather
+// than reads from config. These exist only at runtime, so a static roster
 // cannot confirm them and must not reject them.
-var sessionIdentityShape = regexp.MustCompile(`^(?:[a-z]{2,4}-[0-9a-z]{4,}|.*-adhoc-[0-9a-f]{6,}|.*-auto-\d+)$`)
+var generatedSessionShape = regexp.MustCompile(`^.*-(?:adhoc-[0-9a-f]{6,}|auto-\d+)$`)
+
+// beadIDSuffix matches the generated half of a bead ID, after the prefix.
+var beadIDSuffix = regexp.MustCompile(`^[0-9a-z]{4,}$`)
 
 // reservedAssignees are meaningful owners that are not city configuration:
 // a person, and the mailbox the mayor seat reads.
@@ -42,11 +51,20 @@ var reservedAssignees = map[string]struct{}{
 
 func newAssigneeRoster(cfg *config.City) *assigneeRoster {
 	r := &assigneeRoster{
-		exact:     map[string]struct{}{},
-		poolStems: map[string]struct{}{},
+		exact:      map[string]struct{}{},
+		poolStems:  map[string]struct{}{},
+		idPrefixes: map[string]struct{}{},
 	}
 	if cfg == nil {
 		return r
+	}
+	if p := strings.TrimSpace(config.EffectiveHQPrefix(cfg)); p != "" {
+		r.idPrefixes[p] = struct{}{}
+	}
+	for i := range cfg.Rigs {
+		if p := strings.TrimSpace(cfg.Rigs[i].EffectivePrefix()); p != "" {
+			r.idPrefixes[p] = struct{}{}
+		}
 	}
 	for i := range cfg.NamedSessions {
 		r.addExact(cfg.NamedSessions[i].IdentityName())
@@ -58,6 +76,13 @@ func newAssigneeRoster(cfg *config.City) *assigneeRoster {
 		r.addExact(cfg.Agents[i].QualifiedName())
 		if name != "" {
 			r.poolStems[name] = struct{}{}
+		}
+		// A pool instance is not always named `<agent>-<slot>`: when the agent
+		// declares a namepool, poolInstanceName returns the declared name
+		// instead, which shares nothing with the stem. Those names are
+		// routable and would otherwise read as phantom owners.
+		for _, pooled := range cfg.Agents[i].NamepoolNames {
+			r.addExact(pooled)
 		}
 	}
 	return r
@@ -93,7 +118,10 @@ func (r *assigneeRoster) Resolves(assignee string) bool {
 	}
 	// A runtime identity cannot be confirmed against static config. Treating
 	// an unconfirmable name as a finding would bury the real ones.
-	if sessionIdentityShape.MatchString(assignee) {
+	if generatedSessionShape.MatchString(assignee) {
+		return true
+	}
+	if r.looksLikeBeadID(assignee) {
 		return true
 	}
 	for _, candidate := range assigneeCandidates(assignee) {
@@ -105,6 +133,30 @@ func (r *assigneeRoster) Resolves(assignee string) bool {
 		}
 	}
 	return false
+}
+
+// looksLikeBeadID reports whether assignee is a session identity named after a
+// bead this city could have issued. The prefix is checked against the ones the
+// config declares rather than against a generic letter-run: a shape like
+// `[a-z]{2,4}-[0-9a-z]{4,}` also matches an ordinary misspelling of an agent
+// name ("poly-cat1" for "polecat-1"), which would wave through the exact class
+// of typo this roster exists to catch.
+//
+// When the city declares no prefixes at all there is nothing to check against,
+// so any prefix is accepted. That is the same cannot-answer posture as Empty().
+func (r *assigneeRoster) looksLikeBeadID(assignee string) bool {
+	idx := strings.Index(assignee, "-")
+	if idx <= 0 || idx+1 >= len(assignee) {
+		return false
+	}
+	if !beadIDSuffix.MatchString(assignee[idx+1:]) {
+		return false
+	}
+	if len(r.idPrefixes) == 0 {
+		return true
+	}
+	_, ok := r.idPrefixes[assignee[:idx]]
+	return ok
 }
 
 // assigneeCandidates expands the spellings the same owner is written in across
