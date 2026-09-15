@@ -116,11 +116,14 @@ func (r *assigneeRoster) Resolves(assignee string) bool {
 	if _, ok := reservedAssignees[assignee]; ok {
 		return true
 	}
-	// Every check runs over each spelling of the name, not just the raw one:
-	// the file store records an owner path-qualified ("research/dr-huhn")
-	// where the bd store records it bare, and a runtime identity written the
-	// long way is still a runtime identity.
-	for _, candidate := range assigneeCandidates(assignee) {
+	// The identity checks run over the path spellings only. The file store
+	// records an owner path-qualified ("research/dr-huhn") where the bd store
+	// records it bare, and a runtime identity written the long way is still a
+	// runtime identity. They deliberately do not run over the dot spelling:
+	// those checks match on shape rather than on a configured name, so any
+	// typo carrying a bead-ID-shaped tail after a dot ("sjarmak.gc-818bx")
+	// would pass as a session that never existed.
+	for _, candidate := range pathCandidates(assignee) {
 		// A runtime identity cannot be confirmed against static config.
 		// Treating an unconfirmable name as a finding would bury the real ones.
 		if generatedSessionShape.MatchString(candidate) {
@@ -129,6 +132,11 @@ func (r *assigneeRoster) Resolves(assignee string) bool {
 		if r.looksLikeBeadID(candidate) {
 			return true
 		}
+	}
+	// The name lookups match against names the config actually declares, so a
+	// wider set of spellings costs nothing: a spelling that is not a declared
+	// name still does not resolve.
+	for _, candidate := range assigneeCandidates(assignee) {
 		if _, ok := r.exact[candidate]; ok {
 			return true
 		}
@@ -168,11 +176,18 @@ func (r *assigneeRoster) looksLikeBeadID(assignee string) bool {
 // (the file store records `/home/ds/gas-city/goal-5-temporal` for what the bd
 // store records as `goal-5-temporal`).
 func assigneeCandidates(assignee string) []string {
-	candidates := []string{assignee}
-	if idx := strings.LastIndex(assignee, "/"); idx >= 0 && idx+1 < len(assignee) {
+	candidates := pathCandidates(assignee)
+	if idx := strings.LastIndex(assignee, "."); idx >= 0 && idx+1 < len(assignee) {
 		candidates = append(candidates, assignee[idx+1:])
 	}
-	if idx := strings.LastIndex(assignee, "."); idx >= 0 && idx+1 < len(assignee) {
+	return candidates
+}
+
+// pathCandidates expands only the path spellings of an owner: the name as
+// written, and the trailing segment of a rig-qualified or absolute-path form.
+func pathCandidates(assignee string) []string {
+	candidates := []string{assignee}
+	if idx := strings.LastIndex(assignee, "/"); idx >= 0 && idx+1 < len(assignee) {
 		candidates = append(candidates, assignee[idx+1:])
 	}
 	return candidates

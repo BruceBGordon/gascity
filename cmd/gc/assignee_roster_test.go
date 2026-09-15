@@ -236,7 +236,6 @@ func TestAssigneeRosterResolvesQualifiedSpellingsOfRuntimeIdentities(t *testing.
 	for _, assignee := range []string{
 		"research/dr-huhn",
 		"/home/ds/gas-city/research/dr-huhn",
-		"research.dr-huhn",
 		"research/repo-adhoc-1a2b3c",
 	} {
 		if !roster.Resolves(assignee) {
@@ -272,5 +271,25 @@ func TestPositionalAssignArgSkipsValuedFlagsAfterSubcommand(t *testing.T) {
 		if !ok || got != tc.want {
 			t.Errorf("positionalAssignArg(%v) = (%q, %v), want (%q, true)", tc.args, got, ok, tc.want)
 		}
+	}
+}
+
+// A dot-qualified name whose tail happens to be bead-ID shaped is a typo, not a
+// session. The identity heuristics match on shape rather than on a declared
+// name, so running them over the dot spelling would wave through an owner that
+// never existed.
+func TestAssigneeRosterRejectsDotQualifiedBeadIDShapes(t *testing.T) {
+	r := newAssigneeRoster(rosterCityWithPrefixes())
+	for _, name := range []string{
+		"sjarmak.gc-818bx",
+		"totally-bogus-typo.gc-818bx",
+	} {
+		if r.Resolves(name) {
+			t.Errorf("Resolves(%q) = true, want false: a dot-qualified tail is not a session identity", name)
+		}
+	}
+	// The path spellings the expansion exists for still resolve.
+	if !r.Resolves("research/gc-818bx") {
+		t.Error(`Resolves("research/gc-818bx") = false, want true`)
 	}
 }
