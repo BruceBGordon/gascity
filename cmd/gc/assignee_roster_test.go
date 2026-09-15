@@ -199,3 +199,78 @@ func TestPositionalAssignArgSurvivesLeadingGlobalFlagValues(t *testing.T) {
 		}
 	}
 }
+
+// The word "assign" can appear as a flag value on an unrelated command. Taking
+// it for the subcommand there would refuse a read command over an argument
+// that is not an assignee at all.
+func TestPositionalAssignArgIgnoresAssignAsFlagValue(t *testing.T) {
+	for _, args := range [][]string{
+		{"list", "--label", "assign", "foo", "bar"},
+		{"search", "-l", "assign", "alpha", "beta"},
+	} {
+		if got, ok := positionalAssignArg(args); ok {
+			t.Errorf("positionalAssignArg(%v) = (%q, true); the word was a flag value, not the subcommand", args, got)
+		}
+	}
+	// Still found when it really is the subcommand behind a valued global flag.
+	if got, ok := positionalAssignArg([]string{"--db", "/tmp/x.db", "assign", "gc-1", "polecat"}); !ok || got != "polecat" {
+		t.Errorf("positionalAssignArg lost the real subcommand: (%q, %v)", got, ok)
+	}
+}
+
+// bd documents `bd assign <id> ""` as the unassign form. An empty assignee is
+// a valid state and must not be refused.
+func TestCheckBdAssigneeArgsAllowsPositionalUnassign(t *testing.T) {
+	if err := checkBdAssigneeArgs(testRosterCity(), []string{"assign", "gc-1", ""}, io.Discard); err != nil {
+		t.Errorf("unassign was refused: %v", err)
+	}
+}
+
+// The two stores spell the same owner differently: the file store records a
+// path-qualified name where the bd store records it bare. A runtime identity
+// written the long way is still a runtime identity, and a phantom written the
+// long way is still a phantom.
+func TestAssigneeRosterResolvesQualifiedSpellingsOfRuntimeIdentities(t *testing.T) {
+	roster := newAssigneeRoster(rosterCityWithPrefixes())
+
+	for _, assignee := range []string{
+		"research/dr-huhn",
+		"/home/ds/gas-city/research/dr-huhn",
+		"research.dr-huhn",
+		"research/repo-adhoc-1a2b3c",
+	} {
+		if !roster.Resolves(assignee) {
+			t.Errorf("qualified runtime identity %q was rejected", assignee)
+		}
+	}
+	// The qualification must not launder a name the city cannot route to.
+	for _, assignee := range []string{
+		"/home/ds/gas-city/goal-5-temporal",
+		"research/poly-cat1",
+	} {
+		if roster.Resolves(assignee) {
+			t.Errorf("qualified phantom %q resolved", assignee)
+		}
+	}
+}
+
+// bd global flags may appear after the subcommand. A valued one placed there
+// donates its value to the operand list unless it is skipped, and the gate
+// then checks the actor name instead of the assignee.
+func TestPositionalAssignArgSkipsValuedFlagsAfterSubcommand(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"assign", "gc-1", "--actor", "bob", "polecat"}, "polecat"},
+		{[]string{"assign", "--actor", "bob", "gc-1", "polecat"}, "polecat"},
+		{[]string{"assign", "gc-1", "-C", "/tmp/rig", "polecat"}, "polecat"},
+		{[]string{"assign", "gc-1", "--actor=bob", "polecat"}, "polecat"},
+		{[]string{"assign", "gc-1", "--force", "polecat"}, "polecat"},
+	} {
+		got, ok := positionalAssignArg(tc.args)
+		if !ok || got != tc.want {
+			t.Errorf("positionalAssignArg(%v) = (%q, %v), want (%q, true)", tc.args, got, ok, tc.want)
+		}
+	}
+}

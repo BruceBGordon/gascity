@@ -116,15 +116,19 @@ func (r *assigneeRoster) Resolves(assignee string) bool {
 	if _, ok := reservedAssignees[assignee]; ok {
 		return true
 	}
-	// A runtime identity cannot be confirmed against static config. Treating
-	// an unconfirmable name as a finding would bury the real ones.
-	if generatedSessionShape.MatchString(assignee) {
-		return true
-	}
-	if r.looksLikeBeadID(assignee) {
-		return true
-	}
+	// Every check runs over each spelling of the name, not just the raw one:
+	// the file store records an owner path-qualified ("research/dr-huhn")
+	// where the bd store records it bare, and a runtime identity written the
+	// long way is still a runtime identity.
 	for _, candidate := range assigneeCandidates(assignee) {
+		// A runtime identity cannot be confirmed against static config.
+		// Treating an unconfirmable name as a finding would bury the real ones.
+		if generatedSessionShape.MatchString(candidate) {
+			return true
+		}
+		if r.looksLikeBeadID(candidate) {
+			return true
+		}
 		if _, ok := r.exact[candidate]; ok {
 			return true
 		}

@@ -95,6 +95,16 @@ func extractAssigneeArgs(args []string) []string {
 	return values
 }
 
+// bdValuedGlobalFlags are the bd flags that consume the following argument,
+// taken from `bd --help`. A flag outside this set is treated as a boolean; if
+// bd gains a valued flag that is not listed here the effect is a missed check,
+// never a refused write.
+var bdValuedGlobalFlags = map[string]struct{}{
+	"--actor": {}, "--database": {}, "--db": {},
+	"-C": {}, "--directory": {},
+	"--dolt-auto-commit": {}, "--mem-profile": {},
+}
+
 // positionalAssignArg returns the assignee written by `bd assign <id> <name>`.
 // bd documents exactly two positional operands for that subcommand, so the
 // assignee is the second one after the token, not the last argument on the
@@ -104,12 +114,29 @@ func positionalAssignArg(args []string) (string, bool) {
 		if arg != "assign" {
 			continue
 		}
+		// Distinguish the subcommand from a flag value that happens to be the
+		// word "assign" (`bd list --label assign foo bar`). A subcommand is
+		// never preceded directly by a flag; a flag value always is. Where
+		// that reading is wrong the result is a missed check rather than a
+		// refused write, which is the right way round: a false refusal on an
+		// unrelated command teaches operators to bypass the gate.
+		if i > 0 && strings.HasPrefix(args[i-1], "-") {
+			continue
+		}
 		var operands []string
-		for _, rest := range args[i+1:] {
-			if strings.HasPrefix(rest, "-") {
+		rest := args[i+1:]
+		for j := 0; j < len(rest); j++ {
+			tok := rest[j]
+			if strings.HasPrefix(tok, "-") {
+				// A valued flag placed after the subcommand would otherwise
+				// donate its value to the operand list, and the gate would
+				// check the actor name instead of the assignee.
+				if _, valued := bdValuedGlobalFlags[tok]; valued && !strings.Contains(tok, "=") {
+					j++
+				}
 				continue
 			}
-			operands = append(operands, rest)
+			operands = append(operands, tok)
 			if len(operands) == 2 {
 				return operands[1], true
 			}
