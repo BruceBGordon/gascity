@@ -6512,7 +6512,7 @@ func formatMaxSessions(a *config.Agent) string {
 	return strconv.Itoa(*m)
 }
 
-// reportUnroutableAssignees names every open assigned bead whose assignee
+// reportUnroutableAssignees names every unfinished assigned bead whose assignee
 // resolves to no configured agent or named session. It only reports: choosing a
 // replacement owner is a resourcing decision, and clearing the field would
 // substitute one misleading label for another.
@@ -6524,7 +6524,7 @@ func reportUnroutableAssignees(stderr io.Writer, cfg *config.City, assignedWorkB
 	var unroutable []string
 	seen := make(map[string]struct{})
 	for _, wb := range assignedWorkBeads {
-		if wb.Status != "open" && wb.Status != "in_progress" {
+		if !isOpenWorkStatus(wb.Status) {
 			continue
 		}
 		assignee := strings.TrimSpace(wb.Assignee)
@@ -6541,5 +6541,5 @@ func reportUnroutableAssignees(stderr io.Writer, cfg *config.City, assignedWorkB
 		return
 	}
 	sort.Strings(unroutable)
-	fmt.Fprintf(stderr, "unroutableAssignee: %d open bead(s) assigned to a target that does not resolve: %s\n", len(unroutable), strings.Join(unroutable, " ")) //nolint:errcheck
+	fmt.Fprintf(stderr, "unroutableAssignee: %d unfinished bead(s) assigned to a target that does not resolve: %s\n", len(unroutable), strings.Join(unroutable, " ")) //nolint:errcheck
 }
