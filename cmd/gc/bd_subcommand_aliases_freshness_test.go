@@ -4,12 +4,12 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // realBdPath resolves the actually-installed bd binary, skipping the
@@ -88,8 +88,12 @@ func TestBdSubcommandAliasesCurrent(t *testing.T) {
 
 	for canonical, known := range byCanonical {
 		t.Run(canonical, func(t *testing.T) {
-			out, _ := exec.Command(bdPath, canonical, "--help").CombinedOutput()
-			live := parseHelpAliases(string(out))
+			// Routed through the shared runShellCommand body (pool.go) rather
+			// than a fresh os/exec call site, per the untagged-subprocess
+			// census ratchet in test/test-resources.toml.
+			command := shellQuotePath(bdPath) + " " + shellQuotePath(canonical) + " --help"
+			out, _ := shellCommand(command, "", 10*time.Second, nil)
+			live := parseHelpAliases(out)
 			if live == nil {
 				t.Fatalf("parsed no \"Aliases:\" section from `bd %s --help`; output format may have changed:\n%s", canonical, out)
 			}
