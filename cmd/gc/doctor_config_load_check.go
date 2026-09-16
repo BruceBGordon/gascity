@@ -38,16 +38,31 @@ func (c *configLoadCheck) WarmupEligible() bool { return false }
 func (c *configLoadCheck) Fix(_ *doctor.CheckContext) error { return nil }
 
 func (c *configLoadCheck) Run(ctx *doctor.CheckContext) *doctor.CheckResult {
-	// Re-load live rather than trust the cfgErr captured at registration time:
-	// an earlier check in the same run (e.g. v2-formulas-dir) may have fixed
-	// the config on disk since then, and this check must reflect that, the
-	// same way expanded-config-load does.
-	err := c.err
+	// registrationErr is what gated whether config-dependent checks got
+	// registered for THIS run — that decision was already made before Run
+	// ever executes, and nothing here can undo it.
+	registrationErr := c.err
+	// Re-load live rather than trust registrationErr alone: an earlier check
+	// in the same run (e.g. v2-formulas-dir) may have fixed the config on
+	// disk since then, and this check must reflect that, the same way
+	// expanded-config-load does.
+	err := registrationErr
 	if ctx != nil && ctx.CityPath != "" {
 		_, err = loadCityConfig(ctx.CityPath, io.Discard)
 	}
-	if err == nil {
+	if err == nil && registrationErr == nil {
 		return okCheck(c.Name(), "full config load succeeded; config-dependent checks are registered")
+	}
+	if err == nil {
+		// The live reload just succeeded, but registration ran earlier
+		// against a load that had not yet been repaired, so the checks this
+		// one exists to vouch for were never added to this run's report.
+		// Reporting OK here would be the exact false-clean this check was
+		// added to prevent, just one step removed.
+		return warnCheck(c.Name(),
+			"config load now succeeds, but config-dependent checks were NOT registered for this run because the load failed earlier at registration time; this report is incomplete",
+			"rerun gc doctor once more so the checks register against the repaired config",
+			nil)
 	}
 	return &doctor.CheckResult{
 		Name:    c.Name(),

@@ -42,11 +42,16 @@ var generatedSessionShape = regexp.MustCompile(`^.*-(?:adhoc-[0-9a-f]{6,}|auto-\
 // beadIDSuffix matches the generated half of a bead ID, after the prefix.
 var beadIDSuffix = regexp.MustCompile(`^[0-9a-z]{4,}$`)
 
-// reservedAssignees are meaningful owners that are not city configuration:
-// a person, and the mailbox the mayor seat reads.
+// reservedAssignees are meaningful owners that can never appear in city
+// config, because they name a category of actor rather than a routable
+// target: a person, not an agent. Anything that IS a configured routing
+// target — including a seat like "mayor" — must resolve through the roster
+// built from config below, not through a literal comparison here. Keying
+// this map on a role name would violate the project's zero-hardcoded-roles
+// invariant (AGENTS.md); "human" is not a role, it is the fixed sentinel
+// for "not city-routable by construction".
 var reservedAssignees = map[string]struct{}{
 	"human": {},
-	"mayor": {},
 }
 
 func newAssigneeRoster(cfg *config.City) *assigneeRoster {

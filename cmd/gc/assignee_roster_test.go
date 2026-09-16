@@ -91,6 +91,14 @@ func TestExtractAssigneeArgsCoversEverySpelling(t *testing.T) {
 		{"positional assign", []string{"assign", "dr-1", "ghost"}, []string{"ghost"}},
 		{"no assignee", []string{"list", "--status", "open"}, nil},
 		{"status value is not an assignee", []string{"list", "--status", "open", "--json"}, nil},
+		// list/ready --assignee is a read-only FILTER (bd list --help: "-a,
+		// --assignee string  Filter by assignee"), not a write. B1: this used
+		// to be scanned unconditionally, so `bd list --assignee <phantom>`
+		// refused the exact investigation this gate exists to enable.
+		{"list assignee filter is not a write", []string{"list", "--assignee", "phantom-owner"}, nil},
+		{"ready assignee filter is not a write", []string{"ready", "--assignee", "phantom-owner"}, nil},
+		{"create still scans --assignee", []string{"create", "t", "--assignee", "ghost"}, []string{"ghost"}},
+		{"mol pour still scans --assignee", []string{"mol", "pour", "f", "--assignee", "ghost"}, []string{"ghost"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -118,6 +126,23 @@ func TestCheckBdAssigneeArgsGate(t *testing.T) {
 	}
 	if err := checkBdAssigneeArgs(cfg, []string{"list", "--status", "open"}, nil); err != nil {
 		t.Fatalf("gate rejected a command that writes no assignee: %v", err)
+	}
+
+	// B1: `bd list --assignee <phantom>` / `bd ready --assignee <phantom>`
+	// are read-only queries, not writes. Before the fix, extractAssigneeArgs
+	// scanned them the same as a write and this refused the exact
+	// investigation ("who does this unroutable bead belong to") the gate
+	// exists to enable.
+	if err := checkBdAssigneeArgs(cfg, []string{"list", "--assignee", "goal-5-temporal"}, nil); err != nil {
+		t.Fatalf("gate refused a read-only bd list --assignee filter: %v", err)
+	}
+	if err := checkBdAssigneeArgs(cfg, []string{"ready", "--assignee", "goal-5-temporal"}, nil); err != nil {
+		t.Fatalf("gate refused a read-only bd ready --assignee filter: %v", err)
+	}
+	// Control: the write path for the same unresolvable name is still
+	// refused.
+	if err := checkBdAssigneeArgs(cfg, []string{"update", "dr-1", "--assignee", "goal-5-temporal"}, nil); err == nil {
+		t.Fatal("gate allowed an unresolvable assignee write via update")
 	}
 }
 

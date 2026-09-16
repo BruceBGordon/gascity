@@ -419,6 +419,17 @@ func doBd(args []string, stdout, stderr io.Writer) int {
 	// from a store the operator did not name. Auto-detected scope (GC_RIG, -C,
 	// cwd) is resolved inside resolveBdScopeTarget and deliberately does not
 	// travel — see refuseRigScopedClassOwnedTarget.
+	//
+	// The assignee gate runs before this by-ID door, not just before the
+	// forwarded-subprocess path below: maybeRouteBdByID writes the assignee
+	// in process (cmd_bd_by_id.go, serveBdByIDResolved), so a refusal placed
+	// only after it would run after the write it exists to prevent.
+	if !assigneeGateBypassed() {
+		if err := checkBdAssigneeArgs(cfg, bdArgs, stderr); err != nil {
+			fmt.Fprintf(stderr, "gc bd: %v\n", err) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+	}
 	if code, handled := maybeRouteBdByID(cityPath, rigName, bdArgs, stdout, stderr); handled {
 		return code
 	}

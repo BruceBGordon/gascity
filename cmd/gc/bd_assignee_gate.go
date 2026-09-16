@@ -65,28 +65,48 @@ func checkBdAssigneeArgs(cfg *config.City, args []string, stderr io.Writer) erro
 		strings.Join(quoteAll(bad), ", "), assigneeGateEscapeEnv)
 }
 
+// assigneeWriteSubcommands are the bd subcommands where --assignee/-a WRITES
+// the assignee field. On "list" and "ready" the same flag is a read-only
+// filter (bd list --help: "-a, --assignee string  Filter by assignee"; see
+// internal/bdflags valueFlagsBySub["list"/"ready"]), and refusing those
+// refuses the exact investigation this gate exists to enable. Sourced from
+// bdflags' own per-subcommand manifest rather than hand-picked, so this set
+// cannot drift from what bd actually accepts as a write.
+var assigneeWriteSubcommands = map[string]bool{
+	"create":   true,
+	"update":   true,
+	"mol pour": true,
+}
+
 // extractAssigneeArgs pulls every value a bd invocation would write to the
 // assignee field, in both `--assignee=x` and `--assignee x` spellings, plus the
 // positional form of `bd assign <id> <assignee>`.
 //
-// The positional form is found by locating the literal `assign` token rather
-// than by taking the first non-flag argument as the subcommand. A global flag
-// that carries a separate value (`bd --db /path assign gc-1 polecat-4`) puts a
-// non-flag token ahead of the subcommand, and the positional reading used to
-// land on that value instead, silently skipping the check for exactly the
-// invocation shape it exists to catch.
+// The flag form is scoped to assigneeWriteSubcommands via bdByIDSubcommand,
+// the same subcommand locator the by-ID door uses, so `bd list --assignee X`
+// and `bd ready --assignee X` — read-only filters — are never treated as a
+// write.
+//
+// The positional form is found separately by locating the literal `assign`
+// token rather than by taking the first non-flag argument as the subcommand.
+// A global flag that carries a separate value (`bd --db /path assign gc-1
+// polecat-4`) puts a non-flag token ahead of the subcommand, and the
+// positional reading used to land on that value instead, silently skipping
+// the check for exactly the invocation shape it exists to catch.
 func extractAssigneeArgs(args []string) []string {
 	var values []string
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch {
-		case arg == "--assignee" || arg == "-a":
-			if i+1 < len(args) {
-				values = append(values, args[i+1])
-				i++
+	if sub, subArgs, resolved := bdByIDSubcommand(args); resolved && assigneeWriteSubcommands[sub] {
+		for i := 0; i < len(subArgs); i++ {
+			arg := subArgs[i]
+			switch {
+			case arg == "--assignee" || arg == "-a":
+				if i+1 < len(subArgs) {
+					values = append(values, subArgs[i+1])
+					i++
+				}
+			case strings.HasPrefix(arg, "--assignee="):
+				values = append(values, strings.TrimPrefix(arg, "--assignee="))
 			}
-		case strings.HasPrefix(arg, "--assignee="):
-			values = append(values, strings.TrimPrefix(arg, "--assignee="))
 		}
 	}
 	if positional, ok := positionalAssignArg(args); ok {

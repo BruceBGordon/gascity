@@ -78,7 +78,12 @@ func (c *assigneeResolvesCheck) Run(_ *doctor.CheckContext) *doctor.CheckResult 
 }
 
 func (c *assigneeResolvesCheck) scanScope(findings, skipped *[]string, roster *assigneeRoster, label, path string) {
-	if c.newStore == nil || strings.TrimSpace(path) == "" {
+	if c.newStore == nil {
+		*skipped = append(*skipped, fmt.Sprintf("%s skipped: no bead store constructor configured", label))
+		return
+	}
+	if strings.TrimSpace(path) == "" {
+		*skipped = append(*skipped, fmt.Sprintf("%s skipped: no store path resolved", label))
 		return
 	}
 	store, err := c.newStore(path)
