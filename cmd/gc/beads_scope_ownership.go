@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/gastownhall/gascity/internal/beads/contract"
 	"github.com/gastownhall/gascity/internal/config"
@@ -533,6 +534,16 @@ func cityScopeProviderOwned(cityPath string) (bool, error) {
 	return scopeProviderOwned(cityPath, cityPath)
 }
 
+// pathMatchesAny reports whether root is one of the candidate directories.
+func pathMatchesAny(root string, candidates []string) bool {
+	for _, candidate := range candidates {
+		if samePath(root, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
 func validateProviderScopeOwnership(cityPath string, cfg *config.City) error {
 	journal, exists, err := loadProviderScopeOwnershipJournal(cityPath)
 	if err != nil {
@@ -557,20 +568,32 @@ func validateProviderScopeOwnership(cityPath string, cfg *config.City) error {
 		return nil
 	}
 	resolveRigPaths(cityPath, cfg.Rigs)
+	configuredRigRoots := make([]string, 0, len(cfg.Rigs))
 	for _, rig := range cfg.Rigs {
 		if strings.TrimSpace(rig.Path) == "" {
 			continue
 		}
 		expected["rig:"+rig.Name] = normalizePathForCompare(rig.Path)
+		configuredRigRoots = append(configuredRigRoots, normalizePathForCompare(rig.Path))
 	}
 	for key, entry := range journal.Scopes {
 		if strings.HasPrefix(key, "path:") {
 			continue
 		}
 		want, ok := expected[key]
-		if !ok || !samePath(entry.ScopePath, want) {
-			return fmt.Errorf("scope ownership journal path drift for %q", key)
+		if ok && samePath(entry.ScopePath, want) {
+			continue
 		}
+		// Drift is about where a scope is, not what it is currently called. A
+		// rig-keyed record sitting at a directory city.toml still declares as a
+		// rig is a stale label from an in-place rename; the attach pass ahead of
+		// this one re-keys it, and a journal this validator happens to read
+		// before that (a caller that skipped the attach, a second configured
+		// name for the same path) must not take down the city over it.
+		if strings.HasPrefix(key, "rig:") && pathMatchesAny(entry.ScopePath, configuredRigRoots) {
+			continue
+		}
+		return fmt.Errorf("scope ownership journal path drift for %q", key)
 	}
 	if _, cityProviderOwned := journal.Scopes["city"]; cityProviderOwned {
 		for key, root := range expected {
@@ -661,11 +684,27 @@ func ensureFreshRigProviderOwnership(cityPath string, cfg *config.City) error {
 	return nil
 }
 
+// attachProviderScopeOwnershipRecord re-keys a rig's ownership record onto the
+// name city.toml currently gives it.
+//
+// Two shapes reach here. A `path:` record is a rig detached by removal or by an
+// interrupted add, re-attached when the rig is configured again. A `rig:<other>`
+// record at the same directory is an in-place rename: the operator edited the
+// name in city.toml and moved nothing. Only the first used to be handled, so a
+// rename left the journal keyed on the old name and validateProviderScopeOwnership
+// refused the whole city with path drift — for a label change, with no gc verb
+// that repairs it.
 func attachProviderScopeOwnershipRecord(cityPath, rigName, scopeRoot, actualKey string) error {
-	if !strings.HasPrefix(actualKey, "path:") || strings.TrimSpace(rigName) == "" {
+	if strings.TrimSpace(rigName) == "" {
 		return nil
 	}
 	want := "rig:" + rigName
+	if actualKey == want {
+		return nil
+	}
+	if !strings.HasPrefix(actualKey, "path:") && !strings.HasPrefix(actualKey, "rig:") {
+		return nil
+	}
 	return withProviderScopeOwnershipLock(cityPath, func() error {
 		journal, exists, err := loadProviderScopeOwnershipJournal(cityPath)
 		if err != nil || !exists {
@@ -673,7 +712,7 @@ func attachProviderScopeOwnershipRecord(cityPath, rigName, scopeRoot, actualKey 
 		}
 		entry, ok := journal.Scopes[actualKey]
 		if !ok || !samePath(entry.ScopePath, scopeRoot) {
-			return fmt.Errorf("missing detached ownership for rig %q", rigName)
+			return fmt.Errorf("missing ownership record %q for rig %q", actualKey, rigName)
 		}
 		if existing, collision := journal.Scopes[want]; collision && !samePath(existing.ScopePath, scopeRoot) {
 			return fmt.Errorf("scope ownership journal key collision for %q", want)
@@ -1081,6 +1120,24 @@ func providerScopeOwnershipRecordFromJournal(journal providerScopeOwnershipJourn
 	return physicalKey, journal.Scopes[physicalKey], true, nil
 }
 
+// providerScopeOwnershipLockWait bounds how long a writer waits for the journal
+// lock. The critical section is a read, a validate, a write-temp and a rename of
+// a small JSON file, so any honest contention clears in milliseconds; the bound
+// exists so a crashed holder produces an error an operator can act on instead of
+// a command that hangs.
+var providerScopeOwnershipLockWait = 10 * time.Second
+
+// providerScopeOwnershipLockPoll is the retry interval while waiting.
+const providerScopeOwnershipLockPoll = 20 * time.Millisecond
+
+// withProviderScopeOwnershipLock serializes journal writers.
+//
+// This is a shared mutex, not a singleton lease: `gc rig add` and the
+// controller's AddRig handler are not serialized against each other (the
+// controller's config lock is in-process only) and each provision takes the lock
+// two or three times. Taking it non-blocking made honest concurrency a failure —
+// the loser exited 1 for a rig whose store had already been created — so the
+// acquire waits, bounded.
 func withProviderScopeOwnershipLock(cityPath string, fn func() error) error {
 	path := filepath.Join(normalizePathForCompare(cityPath), ".gc", "scope-ownership.lock")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -1090,15 +1147,36 @@ func withProviderScopeOwnershipLock(cityPath string, fn func() error) error {
 	if err != nil {
 		return fmt.Errorf("open scope ownership lock: %w", err)
 	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := flockWithBoundedWait(lock, providerScopeOwnershipLockWait); err != nil {
 		_ = lock.Close()
-		return fmt.Errorf("scope ownership journal is busy")
+		return err
 	}
 	defer func() {
 		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 		_ = lock.Close()
 	}()
 	return fn()
+}
+
+// flockWithBoundedWait takes an exclusive advisory lock, polling rather than
+// blocking in the kernel so the wait has a deadline the caller chose. A blocking
+// LOCK_EX would be simpler, but it cannot be interrupted, and a wedged holder
+// would hang every later writer with no message.
+func flockWithBoundedWait(lock *os.File, wait time.Duration) error {
+	deadline := time.Now().Add(wait)
+	for {
+		err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			return fmt.Errorf("lock scope ownership journal: %w", err)
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("scope ownership journal is busy: another gc process still holds %s after %s", lock.Name(), wait)
+		}
+		time.Sleep(providerScopeOwnershipLockPoll)
+	}
 }
 
 func writeProviderScopeOwnershipJournal(cityPath string, journal providerScopeOwnershipJournal) error {
