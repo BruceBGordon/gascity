@@ -89,9 +89,16 @@ rather than a refused write, which is the right way round: a false refusal on
 an unrelated command teaches operators to bypass the gate.
 
 **It normalizes bd's subcommand aliases before resolving them.** `bd`
-registers four alias pairs: `create`/`new`, `close`/`done`, `show`/`view`, and
-`mol`/`protomolecule` (each discoverable via `bd <verb> --help`'s "Aliases:"
-section). `bdflags` keys every manifest under the canonical verb only and
+registers seven alias pairs (each discoverable via `bd <verb> --help`'s
+"Aliases:" section). Four are in scope here: `create`/`new`, `close`/`done`,
+`show`/`view`, and `mol`/`protomolecule`. The other three --
+`find-duplicates`/`find-dups`, `heartbeat`/`hb`, and `status`/`stats` -- are
+deliberately absent from `bdSubcommandAliases`: `bdflags` keys none of their
+canonical verbs, and none of the three accepts `--assignee`, so normalizing
+them would resolve nothing and gate nothing. The count is from sweeping all
+118 top-level verbs of bd 1.3.0-rc.1 for an "Aliases:" section, not from
+reading back the entries the table already carried. `bdflags` keys every
+manifest under the canonical verb only and
 performs no alias normalization itself. A reader that resolves a verb via
 `bdflags.Known` without normalizing first silently drops the alias — and
 `create` is the feature's primary write verb, so a bare `bd new --assignee
@@ -113,6 +120,14 @@ integration`) guards the alias table itself the same way
 `internal/bdflags`'s freshness test guards the flag manifest: it shells the
 real installed `bd`'s `--help` per canonical verb and fails if the live CLI
 declares an alias the table doesn't carry, skipping if `bd` isn't on `PATH`.
+Its domain is the table, not `bd`: it builds one subtest per canonical verb
+already present in `bdSubcommandAliases`, so it catches an alias bd ADDS to a
+verb the table knows and cannot catch a verb missing from the table
+altogether. Deleting an entry deletes its own subtest and the guard still
+passes -- measured by doing it, not inferred. Closing that hole means
+enumerating bd's verbs from `bd --help` rather than from our own map, which is
+deliberately out of scope here because none of the three unlisted pairs can
+reach this gate.
 
 Ordering is load-bearing and was established by a test failure rather than by
 design. `gc bd` already carries a pre-flight exact-ID guard that resolves bead

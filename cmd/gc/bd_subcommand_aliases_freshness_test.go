@@ -61,8 +61,10 @@ func parseHelpAliases(help string) map[string]bool {
 
 // TestBdSubcommandAliasesCurrent guards bdSubcommandAliases (cmd_bd_by_id.go)
 // against bd growing or renaming an alias out from under it. gc-0nf9kp round
-// 4 found this table missing three of bd's four registered aliases
-// (done/close, view/show, protomolecule/mol); it shipped stale with every
+// 4 found this table missing three of the four registered aliases in scope
+// here (done/close, view/show, protomolecule/mol); bd registers seven pairs
+// in all, and the other three are out of scope because bdflags keys none of
+// their canonical verbs and none accepts --assignee. It shipped stale with every
 // other test green because nothing compared it against the installed bd.
 //
 // This mirrors internal/bdflags.TestBdFlagManifestCurrent's posture: shell
