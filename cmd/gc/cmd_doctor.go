@@ -177,12 +177,14 @@ func (c *doltTopologyCheck) CanFix() bool { return false }
 func (c *doltTopologyCheck) Fix(_ *doctor.CheckContext) error { return nil }
 
 type buildDoctorChecksOpts struct {
-	Stderr               io.Writer
-	ControllerRunning    bool
-	SupervisorRunning    bool
-	SkipCityDoltCheck    bool
-	SkipManagedDoltCheck bool
-	SkipRigDoltChecks    bool
+	Stderr                  io.Writer
+	ControllerRunning       bool
+	SupervisorRunning       bool
+	SupervisorPID           int
+	SupervisorUnitOwnership doctor.SupervisorUnitOwnership
+	SkipCityDoltCheck       bool
+	SkipManagedDoltCheck    bool
+	SkipRigDoltChecks       bool
 	// SkipStorePreflight suppresses the #5064 bead-store probe. Set by the
 	// `gc start` warmup path: every store-dependent check the preflight gates
 	// is WarmupEligible() == false, so warmupEligibleChecks filters all of them
@@ -231,6 +233,9 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 	register(expandedConfigLoadCheck{})
 	register(&doctor.ImplicitImportCacheCheck{})
 	register(&doctor.DeprecatedAttachmentFieldsCheck{})
+	// Reads only ctx.CityPath, so it stays outside the config gate: a broken
+	// city.toml is precisely when session diagnostics need to be visible.
+	register(doctor.NewNudgeUnconfirmedCheck())
 
 	// Config-dependent checks run only when city.toml loaded cleanly. If it
 	// fails, the core config check above reports the parse error.
@@ -312,6 +317,7 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 	controllerRunning := opts.ControllerRunning
 	register(doctor.NewControllerCheck(cityPath, controllerRunning))
 	register(doctor.NewSupervisorHTTPCheck(opts.SupervisorRunning))
+	register(doctor.NewSupervisorUnitOwnershipCheck(opts.SupervisorRunning, opts.SupervisorPID, opts.SupervisorUnitOwnership))
 
 	if cfgErr == nil && cfg != nil {
 		cityName := loadedCityName(cfg, cityPath)
@@ -432,8 +438,13 @@ func buildDoctorChecks(cityPath string, cfg *config.City, cfgErr error, opts bui
 		// bead-store-preflight already registered early (near city data gates) when storeOK is false.
 		for _, rig := range activeRigs {
 			register(doctor.NewRigPathCheck(rig))
+			// Per-bead worktrees live at <rig>/worktrees/, not under
+			// $CITY/.gc/worktrees/, so none of the city-scoped worktree
+			// checks above can see them.
+			register(doctor.NewRigWorktreesCheck(rig, doctorCfg))
 			register(doctor.NewRigGitCheck(rig))
 			register(doctor.NewRigRootBranchCheck(rig))
+			register(doctor.NewRigSSHKeepaliveCheck(rig))
 			register(doctor.NewRigBDSplitStoreCheck(cityPath, rig))
 			if storeOK {
 				register(doctor.NewRigBeadsCheck(cityPath, rig, storeFactory))
@@ -497,7 +508,18 @@ func doDoctor(opts doctorOpts, stdout, stderr io.Writer) int {
 		resolveRigPaths(cityPath, cfg.Rigs)
 	}
 	controllerRunning := doctor.IsControllerRunning(cityPath)
-	supervisorRunning := supervisorAliveHook() != 0
+	supervisorPID := supervisorAliveHook()
+	supervisorRunning := supervisorPID != 0
+	var supervisorUnitOwnership doctor.SupervisorUnitOwnership
+	if supervisorPID != 0 {
+		raw := supervisorDetermineUnitOwnership(supervisorPID)
+		supervisorUnitOwnership = doctor.SupervisorUnitOwnership{
+			Status:     raw.Status,
+			Unit:       raw.Unit,
+			UnitActive: raw.UnitActive,
+			UnitPID:    raw.UnitPID,
+		}
+	}
 	skipRigDoltChecks := gcDoltSkip()
 	skipCityDoltCheck := skipRigDoltChecks || (!scopeUsesManagedBdStoreContract(cityPath, cityPath) && !workspaceNeedsCityDoltCheck(cityPath, cfg))
 	skipManagedDoltCheck := managedDoltOpsCheckSkip(cityPath, cfg, cfgErr)
@@ -512,14 +534,16 @@ func doDoctor(opts doctorOpts, stdout, stderr io.Writer) int {
 		rolloutFlags, rolloutResolveErr = rollout.Resolve(cfg, rollout.ResolveOptions{})
 	}
 	registered := buildDoctorChecks(cityPath, cfg, cfgErr, buildDoctorChecksOpts{
-		Stderr:               stderr,
-		ControllerRunning:    controllerRunning,
-		SupervisorRunning:    supervisorRunning,
-		SkipCityDoltCheck:    skipCityDoltCheck,
-		SkipManagedDoltCheck: skipManagedDoltCheck,
-		SkipRigDoltChecks:    skipRigDoltChecks,
-		RolloutFlags:         rolloutFlags,
-		RolloutResolveErr:    rolloutResolveErr,
+		Stderr:                  stderr,
+		ControllerRunning:       controllerRunning,
+		SupervisorRunning:       supervisorRunning,
+		SupervisorPID:           supervisorPID,
+		SupervisorUnitOwnership: supervisorUnitOwnership,
+		SkipCityDoltCheck:       skipCityDoltCheck,
+		SkipManagedDoltCheck:    skipManagedDoltCheck,
+		SkipRigDoltChecks:       skipRigDoltChecks,
+		RolloutFlags:            rolloutFlags,
+		RolloutResolveErr:       rolloutResolveErr,
 	})
 	selected, unmatched := doctor.SelectChecks(registered, splitDoctorCheckNames(opts.Checks))
 	if len(unmatched) > 0 {

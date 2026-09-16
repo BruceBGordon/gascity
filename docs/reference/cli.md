@@ -1995,12 +1995,13 @@ bead, because the environment alone cannot reliably name it: $GC_BEAD_ID exists
 only in the controller's dispatch condition environment, never in a session
 shell, and $GC_TRIGGER_BEAD_ID — exported to demand-spawned pool seats as a
 pool-level spawn marker — is absent on other seats (e.g. a warm seat bound
-after start) and never decides what a session claims; the pool is pull. It
-appears in the chain below only as a name fallback for work already claimed:
-for a vapor wisp the trigger IS the work bead. A formula step that must close
+after start) and never decides what a session claims; the pool is pull. Named
+singleton sessions can carry a stale $GC_TRIGGER_BEAD_ID for their entire
+lifetime, pointing at a different bead than the one currently claimed, so it
+must never be consulted ahead of the claim. A formula step that must close
 the bead it is running reads the stamp back here:
 
-    BEAD_ID="$&#123;GC_BEAD_ID:-$&#123;GC_TRIGGER_BEAD_ID:-$(gc hook current --id-only)&#125;&#125;"
+    BEAD_ID="$&#123;GC_BEAD_ID:-$(gc hook current --id-only)&#125;"
 
 The calling session is taken from $GC_SESSION_ID. Exits 1 when there is no
 session identity and when the session has claimed nothing, so a caller that
@@ -4048,11 +4049,15 @@ gc session close <session-id-or-alias> [flags]
 
 ## gc session kill
 
-Force-kill the runtime process for a session without changing its bead state.
+Force-kill the runtime process for a session without discarding its work.
 
-The session remains marked as active, so the reconciler will detect the dead
-process and restart it according to the session's lifecycle rules. This is
-useful for unsticking a session without losing its conversation history.
+The kill syncs the session's lifecycle state to asleep and pokes the controller,
+so the reconciler observes the dead process promptly and restarts the session
+according to its lifecycle rules. This keeps Gas City bead continuity: hooks,
+assignments, and work still point at the same session bead. If the provider has
+resume metadata, Gas City may attempt provider resume, but
+provider conversation continuity is not guaranteed; confirm it with the agent or
+provider after restart.
 
 Accepts a session ID (e.g., gc-42) or session alias (e.g., mayor).
 

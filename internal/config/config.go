@@ -722,6 +722,9 @@ type AgentOverride struct {
 	// SleepAfterIdle overrides idle sleep policy for this agent. Accepts a
 	// duration string (e.g., "30s") or "off".
 	SleepAfterIdle *string `toml:"sleep_after_idle,omitempty"`
+	// AutoReclaimStaleClaims overrides Agent.AutoReclaimStaleClaims (see that
+	// field for semantics).
+	AutoReclaimStaleClaims *bool `toml:"auto_reclaim_stale_claims,omitempty"`
 	// InstallAgentHooks overrides the agent's install_agent_hooks list.
 	InstallAgentHooks []string `toml:"install_agent_hooks,omitempty"`
 	// Skills is a tombstone field retained for v0.15.1 backwards
@@ -2353,15 +2356,17 @@ type LocalDoctorCheck struct {
 // (broken-worktree pointers, missing files) remain hardcoded since they
 // cannot be operator-tuned in any meaningful sense.
 type DoctorConfig struct {
-	// WorktreeRigWarnSize is the per-rig warning threshold for the total
-	// disk footprint under .gc/worktrees/<rig>/. Reported by the
-	// worktree-disk-size check. Go-style human size string ("10GB", "500MB").
+	// WorktreeRigWarnSize is the per-rig warning threshold for a
+	// worktree population's total disk footprint. Reported by the
+	// worktree-disk-size check for .gc/worktrees/<rig>/, and by the
+	// rig:<rig>:worktrees check for the per-bead worktrees at
+	// <rig>/worktrees/. Go-style human size string ("10GB", "500MB").
 	// Empty or unparseable falls back to the default (10 GB).
 	WorktreeRigWarnSize string `toml:"worktree_rig_warn_size,omitempty" jsonschema:"default=10GB"`
 
-	// WorktreeRigErrorSize is the per-rig error threshold. When any rig
-	// exceeds this, the worktree-disk-size check reports an error rather
-	// than a warning. Empty or unparseable falls back to the default
+	// WorktreeRigErrorSize is the per-rig error threshold. When a rig
+	// worktree population exceeds this, the reporting check errors
+	// rather than warns. Empty or unparseable falls back to the default
 	// (50 GB).
 	WorktreeRigErrorSize string `toml:"worktree_rig_error_size,omitempty" jsonschema:"default=50GB"`
 
@@ -3373,6 +3378,11 @@ type Agent struct {
 	// SleepAfterIdle overrides idle sleep policy for this agent. Accepts a
 	// duration string (e.g., "30s") or "off".
 	SleepAfterIdle string `toml:"sleep_after_idle,omitempty"`
+	// AutoReclaimStaleClaims opts this agent into gc hook --claim attempting
+	// a scoped stale-lease reclaim (via `bd reclaim --id`) when a
+	// route-matched candidate's only claim blocker is an existing assignee.
+	// Off by default; staleness is decided entirely by bd's own lease TTL.
+	AutoReclaimStaleClaims bool `toml:"auto_reclaim_stale_claims,omitempty"`
 	// InstallAgentHooks overrides workspace-level install_agent_hooks for this agent.
 	// When set, replaces (not adds to) the workspace default.
 	InstallAgentHooks []string `toml:"install_agent_hooks,omitempty"`

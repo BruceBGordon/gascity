@@ -119,6 +119,7 @@ Agent defines a configured agent in the city.
 | `max_session_age_jitter` | string |  |  | MaxSessionAgeJitter bounds random jitter added to MaxSessionAge on a per-session basis so a fleet of identically-configured agents doesn't synchronize restarts. Duration string (e.g., "15m"). Empty or 0 disables jitter (every session restarts at exactly MaxSessionAge). Ignored when MaxSessionAge is unset. |
 | `assigned_work_defer_limit` | integer |  |  | AssignedWorkDeferLimit bounds how many consecutive reconciler ticks the idle-timeout ladder may defer on the same assigned-work bead (DecideIdleTimeout's AssignedWorkHas rung) before the reconciler overrides the defer and forces a stop via DecideAssignedWorkExhausted. Nil means use the built-in default. Without this backstop a session anchored to a bead that never clears assigned-work (e.g. a bead stuck open due to an upstream status-mapping bug) would defer indefinitely, reproducing the unbounded wake/idle-kill treadmill ga-3ox7rk fixed at the single-tick level. The counter resets whenever the anchor bead changes or the session is not idle-kill-eligible; see sessionHasAwakeAssignedWorkForReachableStore's caller in session_reconciler.go. |
 | `sleep_after_idle` | string |  |  | SleepAfterIdle overrides idle sleep policy for this agent. Accepts a duration string (e.g., "30s") or "off". |
+| `auto_reclaim_stale_claims` | boolean |  |  | AutoReclaimStaleClaims opts this agent into gc hook --claim attempting a scoped stale-lease reclaim (via `bd reclaim --id`) when a route-matched candidate's only claim blocker is an existing assignee. Off by default; staleness is decided entirely by bd's own lease TTL. |
 | `install_agent_hooks` | []string |  |  | InstallAgentHooks overrides workspace-level install_agent_hooks for this agent. When set, replaces (not adds to) the workspace default. |
 | `skills` | []string |  |  | Skills is a tombstone field retained for v0.15.1 backwards compatibility. Accepted during parse for migration visibility, but attachment-list fields are accepted but ignored by the active materializer. |
 | `mcp` | []string |  |  | MCP is a tombstone field retained for v0.15.1 backwards compatibility. Accepted during parse for migration visibility, but attachment-list fields are accepted but ignored by the active materializer. |
@@ -185,6 +186,7 @@ AgentOverride modifies a pack-stamped agent for a specific rig.
 | `max_session_age_jitter` | string |  |  | MaxSessionAgeJitter overrides the jitter added on top of MaxSessionAge. Duration string (e.g., "15m"). Empty disables jitter. |
 | `assigned_work_defer_limit` | integer |  |  | AssignedWorkDeferLimit overrides Agent.AssignedWorkDeferLimit (see that field for semantics). |
 | `sleep_after_idle` | string |  |  | SleepAfterIdle overrides idle sleep policy for this agent. Accepts a duration string (e.g., "30s") or "off". |
+| `auto_reclaim_stale_claims` | boolean |  |  | AutoReclaimStaleClaims overrides Agent.AutoReclaimStaleClaims (see that field for semantics). |
 | `install_agent_hooks` | []string |  |  | InstallAgentHooks overrides the agent's install_agent_hooks list. |
 | `skills` | []string |  |  | Skills is a tombstone field retained for v0.15.1 backwards compatibility. Parsed for migration visibility, but attachment-list fields are accepted but ignored by the active materializer. |
 | `mcp` | []string |  |  | MCP is a tombstone field retained for v0.15.1 backwards compatibility. Parsed for migration visibility, but attachment-list fields are accepted but ignored by the active materializer. |
@@ -245,6 +247,7 @@ AgentPatch modifies existing agents identified by rig scope and Name.
 | `max_session_age_jitter` | string |  |  | MaxSessionAgeJitter overrides the max session age jitter. Duration string (e.g., "15m"). |
 | `assigned_work_defer_limit` | integer |  |  | AssignedWorkDeferLimit overrides Agent.AssignedWorkDeferLimit (see that field for semantics). |
 | `sleep_after_idle` | string |  |  | SleepAfterIdle overrides idle sleep policy for this agent. Accepts a duration string or "off". |
+| `auto_reclaim_stale_claims` | boolean |  |  | AutoReclaimStaleClaims overrides Agent.AutoReclaimStaleClaims (see that field for semantics). |
 | `install_agent_hooks` | []string |  |  | InstallAgentHooks overrides the agent's install_agent_hooks list. |
 | `skills` | []string |  |  | Skills is a tombstone field retained for v0.15.1 backwards compatibility.  Deprecated: removed in v0.16. Tombstone — accepted but ignored. See engdocs/proposals/skill-materialization.md |
 | `mcp` | []string |  |  | MCP is a tombstone field retained for v0.15.1 backwards compatibility.  Deprecated: removed in v0.16. Tombstone — accepted but ignored. See engdocs/proposals/skill-materialization.md |
@@ -374,8 +377,8 @@ DoctorConfig holds settings for the gc doctor surface.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `worktree_rig_warn_size` | string |  | `10GB` | WorktreeRigWarnSize is the per-rig warning threshold for the total disk footprint under .gc/worktrees/&lt;rig&gt;/. Reported by the worktree-disk-size check. Go-style human size string ("10GB", "500MB"). Empty or unparseable falls back to the default (10 GB). |
-| `worktree_rig_error_size` | string |  | `50GB` | WorktreeRigErrorSize is the per-rig error threshold. When any rig exceeds this, the worktree-disk-size check reports an error rather than a warning. Empty or unparseable falls back to the default (50 GB). |
+| `worktree_rig_warn_size` | string |  | `10GB` | WorktreeRigWarnSize is the per-rig warning threshold for a worktree population's total disk footprint. Reported by the worktree-disk-size check for .gc/worktrees/&lt;rig&gt;/, and by the rig:&lt;rig&gt;:worktrees check for the per-bead worktrees at &lt;rig&gt;/worktrees/. Go-style human size string ("10GB", "500MB"). Empty or unparseable falls back to the default (10 GB). |
+| `worktree_rig_error_size` | string |  | `50GB` | WorktreeRigErrorSize is the per-rig error threshold. When a rig worktree population exceeds this, the reporting check errors rather than warns. Empty or unparseable falls back to the default (50 GB). |
 | `nested_worktree_prune` | boolean |  | `false` | NestedWorktreePrune escalates the nested-worktree-prune check from warning to error severity when safely-prunable nested worktrees are present, so CI / scripted doctor runs fail until the operator runs `gc doctor --fix`. Actual removal still requires --fix; this flag does not auto-prune. Safety is enforced by mechanical checks (no uncommitted changes, no unpushed commits, no stashes) — never by role identity. |
 | `check` | []LocalDoctorCheck |  |  | Checks holds city-local inline doctor checks declared via [[doctor.check]] in city.toml. |
 
