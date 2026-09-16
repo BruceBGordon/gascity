@@ -193,7 +193,13 @@ func beadsTopologyCheck(name string) bool {
 	}
 	switch name {
 	case "beads-store", "bead-store-preflight", "bd-split-store", "dolt-topology", "dolt-drift",
-		"dolt-server", "dolt-backup", "dolt-local-only-remote", "beads":
+		"dolt-server", "dolt-backup", "dolt-local-only-remote", "beads",
+		// dolt-config is a statement about who runs the scope's Dolt: on a
+		// bd-owned scope gc retires its own managed config on purpose, so a
+		// warning here means doctor classified the scope as gc-managed. Its
+		// absence from this list is why a migrated city carried a permanent
+		// 'managed dolt-config.yaml not found' through the whole gate.
+		"dolt-config":
 		return true
 	}
 	return strings.HasPrefix(name, "custom-types")
@@ -258,6 +264,25 @@ func assertDoctorGreen(t *testing.T, city *helpers.City, label string) {
 // directions are asserted: present with the scopes named for a proxied city,
 // absent for a city with no proxied scope, so the registration gate is real
 // rather than an unconditional line.
+// assertCheckOK requires one named doctor check to report ok, so a regression
+// says which check regressed instead of only how many did.
+func assertCheckOK(t *testing.T, city *helpers.City, name, label string) {
+	t.Helper()
+	out, _ := city.GC("doctor", "--json")
+	var report doctorReport
+	lastJSONLine(t, out, &report)
+	for _, r := range report.Results {
+		if r.Name != name {
+			continue
+		}
+		if r.Status != "ok" {
+			t.Errorf("%s: doctor check %q = %s (%q), want ok", label, name, r.Status, r.Message)
+		}
+		return
+	}
+	t.Errorf("%s: doctor reported no %q check", label, name)
+}
+
 func assertProxiedBackupAdvisory(t *testing.T, city *helpers.City, label string, want bool, wantScopes ...string) {
 	t.Helper()
 	out, err := city.GC("doctor", "--json")
