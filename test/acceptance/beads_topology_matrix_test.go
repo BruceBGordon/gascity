@@ -180,6 +180,17 @@ func runStorelessShape(t *testing.T, run *helpers.TopologyRun) {
 	})
 }
 
+// topologyDoctorCheckTimeout is the per-check budget the matrix gives doctor.
+//
+// It is the counterpart of widenStartReadyTimeout, and it exists for the same
+// reason: the matrix runs eight cities' worth of real Dolt back to back on one
+// box, and on the direct-external shapes every bd command is a TCP round trip
+// to a real server. doctor's 60s product default is a sensible default and a
+// bad test assumption. Raising it is what makes counting an abandoned check as
+// a failure honest — a check that cannot finish in three minutes here is a hang,
+// not a slow machine, and the matrix's own 90m budget still bounds the run.
+const topologyDoctorCheckTimeout = "180s"
+
 // assertTopologyDoctor runs the real `gc doctor --json` front door and requires
 // no failing check and no warning from a check whose subject is the bead store's
 // topology.
@@ -195,7 +206,7 @@ func runStorelessShape(t *testing.T, run *helpers.TopologyRun) {
 func assertTopologyDoctor(t *testing.T, run *helpers.TopologyRun, allowedFailures []string, when string) {
 	t.Helper()
 	label := run.Topology.Name + " " + when
-	out, err := run.City.GC("doctor", "--json")
+	out, err := run.City.GC("doctor", "--json", "--check-timeout", topologyDoctorCheckTimeout)
 	var report doctorReport
 	lastJSONLine(t, out, &report)
 
