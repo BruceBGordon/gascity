@@ -132,6 +132,13 @@ func ResolveDoltConnectionTarget(fs fsys.FS, cityRoot, scopeRoot string) (DoltCo
 	} else {
 		cfg = ConfigState{}
 	}
+	// Whether the scope's own config.yaml literally carries gc's
+	// `gc.endpoint_origin: managed_city` marker, read before
+	// deriveLegacyConnectionConfig synthesizes an origin for a bd-shaped config
+	// that has none. Only gc writes that key, and gc never writes it into a
+	// scope bd owns — so it is the discriminator the bd-owned fallbacks below
+	// need. See the EndpointOriginManagedCity arm below.
+	gcCanonicalManagedCity := ok && cfg.EndpointOrigin == EndpointOriginManagedCity
 	cfg = deriveLegacyConnectionConfig(fs, cityRoot, scopeRoot, cfg)
 	if err := ValidateConnectionConfigState(fs, cityRoot, scopeRoot, cfg); err != nil {
 		return DoltConnectionTarget{}, err
@@ -187,7 +194,17 @@ func ResolveDoltConnectionTarget(fs fsys.FS, cityRoot, scopeRoot string) (DoltCo
 			// pointed at, in the scope itself. Reading those records is the
 			// difference between the documented direct topologies working and
 			// every command on them reporting the store as down.
-			if IsManagedRuntimeUnavailable(err) {
+			//
+			// Only for a scope gc did not claim, though. The discriminator the
+			// fallbacks rest on is "a live .beads/dolt-server.pid beside a
+			// reachable .beads/dolt-server.port", and gc's own lifecycle writes
+			// only the port — but a bd auto-started standalone server writes
+			// exactly that pair, over the same .beads/dolt a GC-managed city
+			// owns. That is the condition dolt_standalone_conflict.go exists to
+			// reject: adopting it would have gc read and write through a process
+			// the next `gc start` refuses to coexist with, and doctor bless it.
+			// A gc-canonical managed_city scope keeps failing closed.
+			if IsManagedRuntimeUnavailable(err) && !gcCanonicalManagedCity {
 				if bdPort, ok := readProviderOwnedServerPort(fs, scopeRoot); ok {
 					return localServerTarget(target, bdPort), nil
 				}
