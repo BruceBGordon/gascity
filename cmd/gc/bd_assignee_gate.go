@@ -127,7 +127,12 @@ func extractAssigneeArgs(args []string) []string {
 // accepts -- see bdflags.GlobalValueFlags for why that completeness is
 // load-bearing.
 func isGlobalValueFlagToken(tok string) bool {
-	valueFlags := bdflags.GlobalValueFlags()
+	return isValueFlagToken(tok, bdflags.GlobalValueFlags())
+}
+
+// isValueFlagToken reports whether tok is (or carries, via "=") a
+// value-consuming flag in valueFlags.
+func isValueFlagToken(tok string, valueFlags map[string]bool) bool {
 	if valueFlags[tok] {
 		return true
 	}
@@ -139,25 +144,59 @@ func isGlobalValueFlagToken(tok string) bool {
 	return false
 }
 
+// firstBdSubcommandCandidateIndex returns the index of the first token in args
+// that could be bd's actual subcommand: the first token that is not a
+// recognized GLOBAL flag (boolean, or valued together with the argument slot
+// it consumes). It does not resolve WHAT that subcommand is, or whether
+// bdflags even knows it (e.g. "search" carries no per-subcommand flag
+// manifest) — only where it sits.
+//
+// That index is what lets positionalAssignArg tell "the literal word 'assign'
+// IS the subcommand" (it sits at this index) from "the literal word 'assign'
+// is a later token belonging to whatever occupies this index instead" (a flag
+// value or positional operand of that other, real subcommand). bd can never
+// have two subcommands in one invocation, so a later occurrence of the word
+// can never be genuine once an earlier index has already claimed the role,
+// known-to-bdflags or not.
+func firstBdSubcommandCandidateIndex(args []string) int {
+	bools := bdflags.GlobalBoolFlags()
+	values := bdflags.GlobalValueFlags()
+	i := 0
+	for i < len(args) {
+		tok := args[i]
+		if !strings.HasPrefix(tok, "-") {
+			return i
+		}
+		if strings.Contains(tok, "=") || bools[tok] {
+			i++
+			continue
+		}
+		if isValueFlagToken(tok, values) {
+			i += 2
+			continue
+		}
+		// An unrecognized flag. Nothing past it can be judged with
+		// confidence either, so it marks the boundary.
+		return i
+	}
+	return i
+}
+
 // positionalAssignArg returns the assignee written by `bd assign <id> <name>`.
 // bd documents exactly two positional operands for that subcommand, so the
 // assignee is the second one after the token, not the last argument on the
 // line.
 func positionalAssignArg(args []string) (string, bool) {
+	subcommandIdx := firstBdSubcommandCandidateIndex(args)
 	for i, arg := range args {
 		if arg != "assign" {
 			continue
 		}
-		// Distinguish the subcommand from a flag VALUE that happens to be the
-		// word "assign" (`bd --db assign` would put the db path token before
-		// it, not "assign" itself, but a flag whose value follows on the next
-		// argv slot could still land here). The token immediately before
-		// "assign" only donates it as a value when that token is itself a
-		// known value-consuming flag; bd's global BOOLEAN flags (--json, -q,
-		// --global, ...) take no value and sit directly before the verb, so
-		// "bd --json assign" and "bd -q assign" both reach the verb and must
-		// not be skipped here.
-		if i > 0 && strings.HasPrefix(args[i-1], "-") && isGlobalValueFlagToken(args[i-1]) {
+		// Distinguish the subcommand from the same word appearing as a flag
+		// VALUE on an unrelated command (`bd list --label assign foo bar`,
+		// `bd search -l assign alpha beta`): only the occurrence at the
+		// invocation's actual subcommand position can be the real verb.
+		if i != subcommandIdx {
 			continue
 		}
 		var operands []string
