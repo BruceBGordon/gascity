@@ -52,6 +52,14 @@ Per scope, in order, city first:
    (`already-migrated`, exit 0), an embedded or doltlite scope, a scope that
    tracks an external Dolt endpoint, a scope already handed to the provider by
    the ownership handoff, or a scope journaled in `.gc/scope-ownership.json`.
+
+   One already-proxied scope is *not* already migrated: bd writes
+   `dolt_mode: proxied-server` into `metadata.json` at its `prepared` phase and
+   removes `.beads/dolt-mode-migration.json` only after `committed`, so a bd
+   that died in between leaves proxied metadata beside a live journal. gc
+   detects the journal and reruns `bd migrate from-server-to-proxied-server`,
+   which resumes from bd's own record, then re-verifies and pings. That scope
+   reports `migrated`, not `already-migrated`.
 2. **Fence the legacy server.** Refuse unless gc's managed Dolt is
    demonstrably down: no `<city>/.gc/runtime/packs/dolt/dolt-state.json`, no
    live process holding a Dolt store lock under the data dir, and nothing
@@ -87,7 +95,8 @@ Per scope, in order, city first:
    it the proxy and its Dolt child retire after 30s idle and every later command
    pays a cold start.
 6. **Verify and normalise.** Confirm bd's outcome from `metadata.json` and the
-   absence of its in-flight journal, then rewrite `.beads/config.yaml` through
+   absence of its in-flight journal `.beads/dolt-mode-migration.json`, then
+   rewrite `.beads/config.yaml` through
    gc's canonical writer. For a proxied scope that state carries no `dolt.mode`
    and no `dolt.host`/`port`/`user`, so gc's pre-migration keys are dropped.
 7. **Retire gc's own publication.** `<scope>/.beads/dolt-server.port`, and for
@@ -186,6 +195,10 @@ database per rig.
 
 - **A scope failed, the rest succeeded.** Fix what the message names and rerun
   the command. Completed scopes report `already-migrated` and are skipped.
+- **bd died mid-migration.** Rerun the command. A scope whose
+  `.beads/dolt-mode-migration.json` is still present is handed back to
+  `bd migrate from-server-to-proxied-server`, which resumes from that journal
+  and commits; gc then re-verifies and pings it.
 - **The migration committed but bd cannot open the store.** Almost always a
   live legacy server. `gc stop <city>`, then `bd ping` in the scope.
 - **Doctor is red with `dolt runtime state unavailable`.** A stale
