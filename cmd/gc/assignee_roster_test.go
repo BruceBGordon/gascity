@@ -99,6 +99,10 @@ func TestExtractAssigneeArgsCoversEverySpelling(t *testing.T) {
 		{"ready assignee filter is not a write", []string{"ready", "--assignee", "phantom-owner"}, nil},
 		{"create still scans --assignee", []string{"create", "t", "--assignee", "ghost"}, []string{"ghost"}},
 		{"mol pour still scans --assignee", []string{"mol", "pour", "f", "--assignee", "ghost"}, []string{"ghost"}},
+		// M1: pflag's short-flag attached forms. Both write the assignee
+		// exactly like "-a ghost" and must not bypass the gate.
+		{"short flag joined with equals", []string{"update", "dr-1", "-a=ghost"}, []string{"ghost"}},
+		{"short flag attached", []string{"update", "dr-1", "-aghost"}, []string{"ghost"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -225,6 +229,36 @@ func TestPositionalAssignArgSurvivesLeadingGlobalFlagValues(t *testing.T) {
 	}
 }
 
+// M2: bd's global BOOLEAN flags (--json, -q, --global, ...) take no value and
+// can sit directly before the "assign" subcommand. The old check ("does the
+// preceding token start with a dash") treated all of these as a flag value
+// donating the word "assign", and skipped the positional check entirely.
+func TestPositionalAssignArgSurvivesLeadingGlobalBoolFlags(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--json", "assign", "gc-1", "polecat"}, "polecat"},
+		{[]string{"-q", "assign", "gc-1", "polecat"}, "polecat"},
+		{[]string{"--global", "assign", "gc-1", "polecat"}, "polecat"},
+	} {
+		got, ok := positionalAssignArg(tc.args)
+		if !ok || got != tc.want {
+			t.Errorf("positionalAssignArg(%v) = (%q, %v), want (%q, true)", tc.args, got, ok, tc.want)
+		}
+	}
+}
+
+// M3: --format is a bd global valued flag missing from the old hand-copied
+// table, so "bd assign --format json <id> <who>" took the bead ID as the
+// assignee and never inspected <who> -- a false refusal naming a bead ID.
+func TestPositionalAssignArgSkipsFormatFlagAfterSubcommand(t *testing.T) {
+	got, ok := positionalAssignArg([]string{"assign", "--format", "json", "gc-1", "polecat"})
+	if !ok || got != "polecat" {
+		t.Errorf("positionalAssignArg with --format = (%q, %v), want (%q, true)", got, ok, "polecat")
+	}
+}
+
 // The word "assign" can appear as a flag value on an unrelated command. Taking
 // it for the subcommand there would refuse a read command over an argument
 // that is not an assignee at all.
@@ -275,6 +309,26 @@ func TestAssigneeRosterResolvesQualifiedSpellingsOfRuntimeIdentities(t *testing.
 		if roster.Resolves(assignee) {
 			t.Errorf("qualified phantom %q resolved", assignee)
 		}
+	}
+}
+
+// M4: work is also assigned under the runtime session-name spelling, which
+// encodes "/" as "--" and "." as "__" (internal/agent.SessionNameFor). A
+// config-declared agent "polecat" in rig "repo" runs under the session name
+// "repo--polecat-4"; the roster must decode that back to "repo/polecat-4"
+// rather than refusing it as an unroutable assignee.
+func TestAssigneeRosterResolvesSessionNameSpelling(t *testing.T) {
+	c := testRosterCity()
+	c.Agents = append(c.Agents, config.Agent{Name: "polecat-rig", Dir: "repo"})
+	roster := newAssigneeRoster(c)
+
+	// SessionNameFor("repo/polecat-rig") -> "repo--polecat-rig".
+	if !roster.Resolves("repo--polecat-rig") {
+		t.Error("session-name-spelled assignee \"repo--polecat-rig\" was rejected")
+	}
+	// A phantom name must not be laundered by the same decode.
+	if roster.Resolves("repo--ghost") {
+		t.Error("phantom \"repo--ghost\" resolved via the session-name decode")
 	}
 }
 

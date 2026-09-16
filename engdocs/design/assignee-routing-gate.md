@@ -65,14 +65,23 @@ anyway. Legitimate flows assign to targets that do not exist yet, and a gate
 with no documented way past it gets bypassed in ways nobody can audit.
 
 **It anchors on the `assign` subcommand itself, and it runs first.** Assignees
-arrive two ways: as a flag (`--assignee x`, `-a x`, `--assignee=x`) and as the
-second operand of `bd assign <id> <who>`. `positionalAssignArg` finds the
-subcommand by matching the bare token `assign`, rejects a match that is
-directly preceded by a flag (so `bd list --label assign foo bar` is not read as
-a subcommand), and steps over valued flags placed after it so their values are
-not mistaken for operands. Where that reading is wrong the result is a missed
-check rather than a refused write, which is the right way round: a false
-refusal on an unrelated command teaches operators to bypass the gate.
+arrive four ways: `--assignee x`, `-a x`, `--assignee=x`/`-a=x`, the attached
+short form `-aX`, and the second operand of `bd assign <id> <who>`.
+`positionalAssignArg` finds the subcommand by matching the bare token `assign`,
+and must still tell that occurrence apart from the same word appearing as a
+flag *value* (`bd list --label assign foo bar`). The token immediately before
+`assign` only donates it as a value when that token is itself a
+value-consuming global flag — checking merely "does the preceding token start
+with a dash" is wrong, because bd's global *boolean* flags (`--json`, `-q`,
+`--global`, ...) take no value and sit directly before the verb, so
+`bd --json assign` and `bd -q assign` both reach the real subcommand. The gate
+also steps over valued flags placed after the subcommand (including
+`--format`) so their values are not mistaken for operands. Both the
+value-flag and boolean-flag manifests are sourced from `internal/bdflags`
+rather than hand-copied, so they cannot silently drift from what `bd` actually
+accepts. Where a spelling is still unrecognized the result is a missed check
+rather than a refused write, which is the right way round: a false refusal on
+an unrelated command teaches operators to bypass the gate.
 
 Ordering is load-bearing and was established by a test failure rather than by
 design. `gc bd` already carries a pre-flight exact-ID guard that resolves bead
@@ -113,6 +122,15 @@ shape-matching lookups are not, so they stay narrow.
 That asymmetry is the whole of the dot-spelling fix, and it is the reason the
 two candidate expansions are separate functions rather than one.
 
+Work is also assigned under the runtime session-name spelling
+(`internal/agent.SessionNameFor`), which encodes `/` as `--` and `.` as `__`
+so a rig-qualified agent like `repo/polecat-4` runs as session `repo--polecat-4`.
+The name lookups decode that spelling back with
+`agent.UnsanitizeQualifiedNameFromSession` before re-running the path
+candidates over it, so it inherits the same asymmetry: fed only into the name
+lookups, never into the shape-matching checks, for the same reason the dot
+spelling is excluded from those.
+
 ### Doctor visibility
 
 Two changes, both about not reporting health that was never established.
@@ -125,6 +143,14 @@ The unfinished-work predicate is unified so the reconciler report and the
 assignee report agree on which beads are live, and a config that fails to load
 is reported as a failure to load rather than as a clean run over a partial
 read.
+
+`assigneeResolvesCheck` also scans a rig it should skip: it read `rig.Suspended`
+directly, the field `internal/config` documents callers must never branch on.
+A rig suspended the modern way (via the runtime suspension-state store rather
+than the static config bit) was still scanned while its store was not serving,
+which parks the check on a permanent yellow. It now calls
+`suspensionstate.EffectiveRigSuspended`, matching the sibling doctor checks
+(`doctor_work_option_metadata.go`, `doctor_pool_idle_routed_work_check.go`).
 
 ## Alternatives considered
 
@@ -152,3 +178,8 @@ that says what could ever pick work up.
 - The gate covers the `gc bd` seam. A direct `bd` invocation that bypasses `gc`
   is not gated, by construction. Whether that seam should move is out of scope
   here.
+- `gc agent-script`'s `bd_update` action invokes the raw `bd` binary via
+  `runBDForBead` without ever calling `checkBdAssigneeArgs`, so `gc` itself has
+  a write path around its own gate. Closing it needs `config.City` threaded
+  into `agentScriptContext`; tracked as a follow-up rather than folded into
+  this round (gc-rmvve6).

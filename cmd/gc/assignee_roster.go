@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/gastownhall/gascity/internal/agent"
 	"github.com/gastownhall/gascity/internal/config"
 )
 
@@ -180,10 +181,21 @@ func (r *assigneeRoster) looksLikeBeadID(assignee string) bool {
 // the fleet: bare, qualified with a rig or directory prefix, and absolute paths
 // (the file store records `/home/ds/gas-city/goal-5-temporal` for what the bd
 // store records as `goal-5-temporal`).
+//
+// Work is also assigned under the runtime session-name spelling, which encodes
+// "/" as "--" and "." as "__" (internal/agent.SessionNameFor). That decode is
+// fed only into these NAME lookups, never into the shape heuristics in
+// Resolves (generatedSessionShape / looksLikeBeadID): those match on shape
+// rather than on a configured name, so a decoded string carrying a
+// bead-ID-shaped tail would pass as a session that never existed, the same
+// reason the dot spelling is already excluded from them.
 func assigneeCandidates(assignee string) []string {
 	candidates := pathCandidates(assignee)
 	if idx := strings.LastIndex(assignee, "."); idx >= 0 && idx+1 < len(assignee) {
 		candidates = append(candidates, assignee[idx+1:])
+	}
+	if unsanitized := agent.UnsanitizeQualifiedNameFromSession(assignee); unsanitized != assignee {
+		candidates = append(candidates, pathCandidates(unsanitized)...)
 	}
 	return candidates
 }

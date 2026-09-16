@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/gastownhall/gascity/internal/bdflags"
 	"github.com/gastownhall/gascity/internal/config"
 )
 
@@ -106,6 +107,11 @@ func extractAssigneeArgs(args []string) []string {
 				}
 			case strings.HasPrefix(arg, "--assignee="):
 				values = append(values, strings.TrimPrefix(arg, "--assignee="))
+			case strings.HasPrefix(arg, "-a") && arg != "-a":
+				// pflag also accepts the short-flag attached forms "-aNAME"
+				// and "-a=NAME"; both write the assignee exactly like the
+				// separated form and must not bypass the gate.
+				values = append(values, strings.TrimPrefix(strings.TrimPrefix(arg, "-a"), "="))
 			}
 		}
 	}
@@ -115,14 +121,22 @@ func extractAssigneeArgs(args []string) []string {
 	return values
 }
 
-// bdValuedGlobalFlags are the bd flags that consume the following argument,
-// taken from `bd --help`. A flag outside this set is treated as a boolean; if
-// bd gains a valued flag that is not listed here the effect is a missed check,
-// never a refused write.
-var bdValuedGlobalFlags = map[string]struct{}{
-	"--actor": {}, "--database": {}, "--db": {},
-	"-C": {}, "--directory": {},
-	"--dolt-auto-commit": {}, "--mem-profile": {},
+// isGlobalValueFlagToken reports whether tok is (or carries, via "=") a bd
+// global flag that consumes the next argument. Sourced from bdflags rather
+// than a hand-copied table, so this cannot drift from what bd actually
+// accepts -- see bdflags.GlobalValueFlags for why that completeness is
+// load-bearing.
+func isGlobalValueFlagToken(tok string) bool {
+	valueFlags := bdflags.GlobalValueFlags()
+	if valueFlags[tok] {
+		return true
+	}
+	for flag := range valueFlags {
+		if strings.HasPrefix(tok, flag+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 // positionalAssignArg returns the assignee written by `bd assign <id> <name>`.
@@ -134,13 +148,16 @@ func positionalAssignArg(args []string) (string, bool) {
 		if arg != "assign" {
 			continue
 		}
-		// Distinguish the subcommand from a flag value that happens to be the
-		// word "assign" (`bd list --label assign foo bar`). A subcommand is
-		// never preceded directly by a flag; a flag value always is. Where
-		// that reading is wrong the result is a missed check rather than a
-		// refused write, which is the right way round: a false refusal on an
-		// unrelated command teaches operators to bypass the gate.
-		if i > 0 && strings.HasPrefix(args[i-1], "-") {
+		// Distinguish the subcommand from a flag VALUE that happens to be the
+		// word "assign" (`bd --db assign` would put the db path token before
+		// it, not "assign" itself, but a flag whose value follows on the next
+		// argv slot could still land here). The token immediately before
+		// "assign" only donates it as a value when that token is itself a
+		// known value-consuming flag; bd's global BOOLEAN flags (--json, -q,
+		// --global, ...) take no value and sit directly before the verb, so
+		// "bd --json assign" and "bd -q assign" both reach the verb and must
+		// not be skipped here.
+		if i > 0 && strings.HasPrefix(args[i-1], "-") && isGlobalValueFlagToken(args[i-1]) {
 			continue
 		}
 		var operands []string
@@ -150,8 +167,9 @@ func positionalAssignArg(args []string) (string, bool) {
 			if strings.HasPrefix(tok, "-") {
 				// A valued flag placed after the subcommand would otherwise
 				// donate its value to the operand list, and the gate would
-				// check the actor name instead of the assignee.
-				if _, valued := bdValuedGlobalFlags[tok]; valued && !strings.Contains(tok, "=") {
+				// check that value (or, worse, the bead ID) as if it were the
+				// assignee.
+				if isGlobalValueFlagToken(tok) && !strings.Contains(tok, "=") {
 					j++
 				}
 				continue
