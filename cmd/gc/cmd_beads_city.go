@@ -41,7 +41,13 @@ func newBeadsCityCmd(stdout, stderr io.Writer) *cobra.Command {
 Use use-managed to make the city GC-managed again. Use use-external to pin the
 city to an external Dolt endpoint and rewrite inherited rig mirrors. Use
 migrate-proxied to move a legacy GC-managed city onto bd's proxied-server
-topology.`,
+topology.
+
+use-managed and use-external manage gc-owned endpoint topology only. They refuse
+a city whose store the beads provider owns — one journaled in
+.gc/scope-ownership.json, one transferred by the ownership handoff, or one bd's
+metadata binds to the proxied-server path — because that endpoint lives in bd's
+own files and is bd's to change.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, args []string) error {
 			if len(args) == 0 {
@@ -128,6 +134,12 @@ func doBeadsCityEndpoint(fs fsys.FS, cityPath string, opts cityEndpointOptions, 
 		fmt.Fprintf(stderr, "%s: only supported for bd-backed beads providers\n", name) //nolint:errcheck
 		return 1
 	}
+	// Before --dry-run, too: a plan for a change the command will never make is
+	// worse than no plan.
+	if err := refuseProviderOwnedEndpointScope(cityPath, cityPath); err != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", name, err) //nolint:errcheck
+		return 1
+	}
 
 	rawCfg, err := loadCityConfigForEditFS(fs, filepath.Join(cityPath, "city.toml"))
 	if err != nil {
@@ -208,7 +220,7 @@ func doBeadsCityEndpoint(fs fsys.FS, cityPath string, opts cityEndpointOptions, 
 		fmt.Fprintf(stderr, "%s: snapshot canonical files: %v\n", name, err) //nolint:errcheck
 		return 1
 	}
-	if err := requireCanonicalizedScopeMetadata(fs, cityPath); err != nil {
+	if err := requireCanonicalizedScopeMetadata(fs, cityPath, cityPath); err != nil {
 		writeCityEndpointRollbackError(fs, stderr, snapshots, name, "canonicalizing metadata", err)
 		return 1
 	}
@@ -220,7 +232,20 @@ func doBeadsCityEndpoint(fs fsys.FS, cityPath string, opts cityEndpointOptions, 
 		if !plan.Update {
 			continue
 		}
-		if err := canonicalizeScopeMetadataIfPresent(fs, plan.Rig.Path); err != nil {
+		// A bd-owned rig does not inherit the city's endpoint: bd resolves its
+		// store from its own binding. Sweeping it along would write gc endpoint
+		// keys into a config.yaml bd owns, so the sweep skips it and says so
+		// rather than refusing the whole city.
+		owned, err := scopeProviderOwned(cityPath, plan.Rig.Path)
+		if err != nil {
+			writeCityEndpointRollbackError(fs, stderr, snapshots, name, "classifying inherited rig ownership", err)
+			return 1
+		}
+		if owned {
+			fmt.Fprintf(stderr, "%s: skipping rig %q: %v\n", name, plan.Rig.Name, providerOwnedEndpointScopeError(plan.Rig.Path)) //nolint:errcheck
+			continue
+		}
+		if err := canonicalizeScopeMetadataIfPresent(fs, cityPath, plan.Rig.Path); err != nil {
 			writeCityEndpointRollbackError(fs, stderr, snapshots, name, "canonicalizing inherited rig metadata", err)
 			return 1
 		}

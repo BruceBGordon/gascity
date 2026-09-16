@@ -172,10 +172,10 @@ func TestNoDoorFlipsAnEmbeddedScopesStorageMode(t *testing.T) {
 			return ensureCanonicalScopeMetadataForInit(fsys.OSFS{}, scope, "jc", "proxied-server")
 		},
 		"endpoint path, named scope": func(scope string) error {
-			return requireCanonicalizedScopeMetadata(fsys.OSFS{}, scope)
+			return requireCanonicalizedScopeMetadata(fsys.OSFS{}, scope, scope)
 		},
 		"endpoint path, inherited rig": func(scope string) error {
-			return canonicalizeScopeMetadataIfPresent(fsys.OSFS{}, scope)
+			return canonicalizeScopeMetadataIfPresent(fsys.OSFS{}, scope, scope)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
