@@ -1033,11 +1033,9 @@ var (
 var recoverManagedBDCommand = func(cityPath string) error {
 	script := gcBeadsBdScriptPath(cityPath)
 	overrides := cityRuntimeEnvMapForCity(cityPath)
-	gcBin, err := resolveProviderLifecycleGCBinary()
-	if err != nil {
-		return fmt.Errorf("resolve invoking gc executable: %w", err)
-	}
-	if gcBin != "" {
+	// Recovering the legacy managed server is the path an in-place gc upgrade
+	// most needs to keep working, so the GC_BIN pin is best effort here.
+	if gcBin := bestEffortProviderLifecycleGCBinary(); gcBin != "" {
 		overrides["GC_BIN"] = gcBin
 	}
 	if err := applyWorkspacePinnedBdBinary(overrides, cityPath); err != nil {
@@ -1459,9 +1457,8 @@ func bdCommandRunnerWithManagedRetryErr(cityPath string, envFn func(dir string) 
 		if env == nil {
 			env = map[string]string{}
 		}
-		if err := pinBdGCEnvironment(env); err != nil {
-			return nil, err
-		}
+		// Legacy managed path: best effort. See pinBdGCEnvironmentBestEffort.
+		pinBdGCEnvironmentBestEffort(env)
 		ensureProjectedDoltEnvExplicit(env)
 		runner, runnerErr := beadsCommandRunnerForHostedCity(cityPath, env)
 		if runnerErr != nil {
@@ -1487,9 +1484,7 @@ func bdCommandRunnerWithManagedRetryErr(cityPath string, envFn func(dir string) 
 		if retryEnv == nil {
 			retryEnv = map[string]string{}
 		}
-		if err := pinBdGCEnvironment(retryEnv); err != nil {
-			return nil, err
-		}
+		pinBdGCEnvironmentBestEffort(retryEnv)
 		ensureProjectedDoltEnvExplicit(retryEnv)
 		retryRunner, runnerErr := beadsCommandRunnerForHostedCity(cityPath, retryEnv)
 		if runnerErr != nil {
