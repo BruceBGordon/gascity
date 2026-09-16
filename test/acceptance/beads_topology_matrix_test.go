@@ -181,9 +181,24 @@ func runStorelessShape(t *testing.T, run *helpers.TopologyRun) {
 	})
 }
 
+// topologyDoctorCheckTimeout is the per-check budget the matrix gives doctor.
+//
+// It is the counterpart of widenStartReadyTimeout, and it exists for the same
+// reason: the matrix runs eight cities' worth of real Dolt back to back on one
+// box, and on the direct-external shapes every bd command is a TCP round trip
+// to a real server. doctor's 60s product default is a sensible default and a
+// bad test assumption. Raising it is what makes counting an abandoned check as
+// a failure honest — a check that cannot finish in three minutes here is a hang,
+// not a slow machine, and the matrix's own 90m budget still bounds the run.
+const topologyDoctorCheckTimeout = "180s"
+
 // assertTopologyDoctor runs the real `gc doctor --json` front door and requires
-// exit 0, no failures, and no warning from a check whose subject is the bead
-// store's topology.
+// no failing check and no warning from a check whose subject is the bead store's
+// topology.
+//
+// The verdict comes from the report, not the exit code: a timed-out check is
+// advisory, so `gc doctor` exits 0 while reporting it failed. The exit code is
+// logged alongside a failure for context only.
 //
 // allowedFailures names the checks a shape may legitimately fail at this point
 // in its life. Only the legacy shape uses it, and only before its first start:
@@ -192,7 +207,7 @@ func runStorelessShape(t *testing.T, run *helpers.TopologyRun) {
 func assertTopologyDoctor(t *testing.T, run *helpers.TopologyRun, allowedFailures []string, when string) {
 	t.Helper()
 	label := run.Topology.Name + " " + when
-	out, err := run.City.GC("doctor", "--json")
+	out, err := run.City.GC("doctor", "--json", "--check-timeout", topologyDoctorCheckTimeout)
 	var report doctorReport
 	lastJSONLine(t, out, &report)
 
@@ -214,14 +229,15 @@ func assertTopologyDoctor(t *testing.T, run *helpers.TopologyRun, allowedFailure
 			if allowed[r.Name] {
 				continue
 			}
-			// A check that timed out reports its own outcome as unknown. The
-			// matrix runs eight shapes' worth of real Dolt back to back, so a
-			// check that ran out of wall clock is a statement about the box,
-			// not about the topology this test is measuring. It is logged
-			// above either way.
-			if strings.Contains(r.Message, "timed out") {
-				continue
-			}
+			// A timed-out check used to be waved through here as "a statement
+			// about the box". It is not: doctor abandons a check at
+			// --check-timeout and records the outcome as unknown, which is
+			// exactly what a reintroduced per-scope `bd ping` fan-out or a proxy
+			// cold-start hang looks like. Counting it as a failure is also what
+			// the sibling assertDoctorGreen does (report.Failed includes every
+			// StatusError), and the asymmetry between the two is what let three
+			// real timeouts on this branch reach the matrix unseen. A shape that
+			// genuinely cannot finish a check names it in DoctorGaps.
 			failures++
 		case "warning":
 			if !beadsTopologyCheck(r.Name) {

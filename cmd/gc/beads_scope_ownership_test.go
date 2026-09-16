@@ -1092,6 +1092,66 @@ func TestProviderOwnedReadyScopeIgnoresAmbientTransportSelectors(t *testing.T) {
 	}
 }
 
+// TestProviderOwnedRecoveryLeavesHealthyScopesAlone pins the blast radius of a
+// failed health ping. Each fresh proxied scope has its own proxy root, so
+// stopping is per-scope work: a rig whose `bd ping` timed out is not a reason to
+// retire the city's Dolt, and `gc beads health` runs under live agents.
+func TestProviderOwnedRecoveryLeavesHealthyScopesAlone(t *testing.T) {
+	city := t.TempDir()
+	healthy := filepath.Join(city, "rigs", "healthy")
+	broken := filepath.Join(city, "rigs", "broken")
+	for _, dir := range []string{healthy, broken} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logPath := filepath.Join(city, "provider-ops")
+	failedOnce := filepath.Join(city, "broken-health-failed")
+	script := filepath.Join(city, "provider.sh")
+	contents := fmt.Sprintf(`#!/bin/sh
+printf '%%s:%%s\n' "$1" "$BEADS_DIR" >> %q
+if [ "$1" = health ] && [ "$BEADS_DIR" = %q ] && [ ! -e %q ]; then
+  touch %q
+  exit 1
+fi
+`, logPath, filepath.Join(broken, ".beads"), failedOnce, failedOnce)
+	if err := os.WriteFile(script, []byte(contents), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cityToml := "[workspace]\nname = \"test\"\n[beads]\nprovider = \"exec:" + script + "\"\n" +
+		"[[rigs]]\nname = \"healthy\"\npath = \"rigs/healthy\"\n" +
+		"[[rigs]]\nname = \"broken\"\npath = \"rigs/broken\"\n"
+	if err := os.WriteFile(filepath.Join(city, "city.toml"), []byte(cityToml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, scope := range []string{city, healthy, broken} {
+		if err := persistProviderScopeOwnership(city, scope, providerScopeIntent{Transport: "proxied", Target: "local"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := markProviderScopeOwnershipReady(city, scope); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := healthBeadsProviderContext(context.Background(), city, false); err != nil {
+		t.Fatalf("healthBeadsProviderContext: %v", err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range strings.Fields(string(data)) {
+		if !strings.HasPrefix(op, "recover:") {
+			continue
+		}
+		if op != "recover:"+filepath.Join(broken, ".beads") {
+			t.Fatalf("recover reached a scope whose health passed: %q\nfull op log:\n%s", op, data)
+		}
+	}
+	if !strings.Contains(string(data), "recover:"+filepath.Join(broken, ".beads")) {
+		t.Fatalf("the unhealthy scope was never recovered:\n%s", data)
+	}
+}
+
 func TestProviderOwnedHealthAndRecoveryCoverEachOwnedRig(t *testing.T) {
 	city := t.TempDir()
 	rig := filepath.Join(city, "rigs", "repo")
@@ -1130,12 +1190,15 @@ fi
 		t.Fatal(err)
 	}
 	got := strings.Fields(string(data))
+	// Health answers for the whole city — one bad scope must not hide the state
+	// of the others — but recovery is scoped to what actually failed. `recover`
+	// is `bd dolt stop` plus `bd ping`, so recovering the city here would retire
+	// a working proxy child and its dolt sql-server under live agents because a
+	// rig's ping timed out once.
 	want := []string{
 		"health:" + filepath.Join(city, ".beads"),
 		"health:" + filepath.Join(rig, ".beads"),
-		"recover:" + filepath.Join(city, ".beads"),
 		"recover:" + filepath.Join(rig, ".beads"),
-		"health:" + filepath.Join(city, ".beads"),
 		"health:" + filepath.Join(rig, ".beads"),
 	}
 	if !reflect.DeepEqual(got, want) {

@@ -293,6 +293,19 @@ func BeadsTopologies() []BeadsTopology {
 	// degraded. The direct transports have no equivalent yet, which is a
 	// reporting gap worth closing separately — not a store that does not work.
 	bdOwnedDirectStoreWarning := map[string]string{"beads-store": "BdStore fallback"}
+	// The one doctor check the matrix cannot give a bigger budget.
+	//
+	// assertTopologyDoctor counts every abandoned check as a failure and raises
+	// doctor's per-check budget so that counting is honest. order-firing-current
+	// does not use that budget: it wraps its own store open in a hardcoded 15s
+	// timer (internal/doctor/checks_order_firing.go), and on the direct-external
+	// shapes that open is a TCP round trip to a real server the matrix shares
+	// with seven other cities' worth of Dolt. The check already declares that
+	// outcome inconclusive rather than a finding -- SeverityAdvisory, TimedOut,
+	// "a timed-out lookup is not proof of a stale order" -- so on these two
+	// shapes it measures the box. Named here, on these shapes only: a timeout on
+	// any other check, or on any other shape, still fails the matrix.
+	directExternalDoctorGaps := []string{"order-firing-current"}
 	return []BeadsTopology{
 		{
 			Name:     "M1-proxied-local",
@@ -319,6 +332,7 @@ func BeadsTopologies() []BeadsTopology {
 			// The adopted store carries the bead vocabulary of the bd that
 			// created it, not gc's, until gc's lifecycle has run over it once.
 			PreStartDoctorGaps: []string{"custom-types:city"},
+			DoctorGaps:         directExternalDoctorGaps,
 			City: ScopeShape{
 				DoltMode: "server", Journaled: false, Proxies: 0, Servers: 0,
 				Owner: OwnerUpstream, EndpointOrigin: "city_canonical",
@@ -341,6 +355,7 @@ func BeadsTopologies() []BeadsTopology {
 			City:                     directExternalScope,
 			Rig:                      directExternalScope,
 			ExpectedTopologyWarnings: bdOwnedDirectStoreWarning,
+			DoctorGaps:               directExternalDoctorGaps,
 			InitArgs: func(up *ExternalDolt) []string {
 				return []string{
 					"--beads-transport", "direct", "--beads-target", "external",

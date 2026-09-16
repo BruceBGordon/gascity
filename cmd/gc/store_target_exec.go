@@ -68,7 +68,7 @@ func copyExecProjectedBackendEnv(dst, src map[string]string) {
 	}
 }
 
-func gcExecStoreEnv(cityPath string, target execStoreTarget, provider string) (map[string]string, error) {
+func gcExecStoreEnv(cityPath string, target execStoreTarget, provider string) map[string]string {
 	env := cityRuntimeEnvMapForCity(cityPath)
 	env["GC_PROVIDER"] = provider
 	env["GC_STORE_ROOT"] = target.ScopeRoot
@@ -81,11 +81,11 @@ func gcExecStoreEnv(cityPath string, target execStoreTarget, provider string) (m
 	env["BEADS_DOLT_AUTO_START"] = ""
 	env["GC_BIN"] = ""
 	if execProviderUsesCanonicalBdScopeFiles(provider) {
-		gcBin, err := resolveProviderLifecycleGCBinary()
-		if err != nil {
-			return nil, fmt.Errorf("resolve invoking gc executable: %w", err)
-		}
-		if gcBin != "" {
+		// Best effort: this env opens a store for a read or a write, and a gc
+		// whose own on-disk path was removed by an upgrade must still serve the
+		// dashboard and its supervisor's reconciler. The provider-owned lifecycle
+		// env keeps the strict pin.
+		if gcBin := bestEffortProviderLifecycleGCBinary(); gcBin != "" {
 			env["GC_BIN"] = gcBin
 		}
 	}
@@ -93,14 +93,11 @@ func gcExecStoreEnv(cityPath string, target execStoreTarget, provider string) (m
 		env["GC_RIG"] = target.RigName
 		env["GC_RIG_ROOT"] = target.ScopeRoot
 	}
-	return env, nil
+	return env
 }
 
 func gcExecLifecycleInitProcessEnv(cityPath string, target execStoreTarget, provider string) ([]string, error) {
-	env, err := gcExecStoreEnv(cityPath, target, provider)
-	if err != nil {
-		return nil, err
-	}
+	env := gcExecStoreEnv(cityPath, target, provider)
 	if !execProviderNeedsScopedDoltInit(provider) {
 		return mergeRuntimeEnv(os.Environ(), env), nil
 	}

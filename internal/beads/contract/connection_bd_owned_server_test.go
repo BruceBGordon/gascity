@@ -122,6 +122,37 @@ func TestResolveDoltConnectionTargetIgnoresPortMirrorWithoutBdPID(t *testing.T) 
 	}
 }
 
+// TestResolveDoltConnectionTargetRefusesStandaloneBdServerInAGcManagedCity is
+// the other half of the pid/port discriminator.
+//
+// "Live pid beside a reachable port" says bd started a server. It does not say
+// bd owns the scope: a bare `bd` run in a stopped GC-managed city auto-starts
+// exactly that server over the same .beads/dolt the managed city owns, which is
+// the standalone conflict `gc start` refuses. Adopting it would have gc read and
+// write through a process it will shortly tell the operator to kill, with doctor
+// reporting the city healthy in between.
+//
+// gc's own marker is the discriminator that holds: only gc writes
+// `gc.endpoint_origin: managed_city` into a config.yaml, and it never writes one
+// into a scope bd owns, so a scope that literally carries it fails closed.
+func TestResolveDoltConnectionTargetRefusesStandaloneBdServerInAGcManagedCity(t *testing.T) {
+	fs := fsys.OSFS{}
+	city := t.TempDir()
+	writeCanonicalConfig(t, fs, city, ConfigState{
+		IssuePrefix:    "gc",
+		EndpointOrigin: EndpointOriginManagedCity,
+		EndpointStatus: EndpointStatusVerified,
+	})
+	writeCanonicalMetadata(t, fs, city, "hq")
+	// No gc runtime state: `gc stop` has run. A rogue bd then started its own
+	// server and left a live pid beside a reachable port.
+	writeBdOwnedServerRecord(t, fs, city, os.Getpid())
+
+	if _, err := ResolveDoltConnectionTarget(fs, city, city); err == nil || !IsManagedRuntimeUnavailable(err) {
+		t.Fatalf("ResolveDoltConnectionTarget() error = %v, want managed runtime unavailable for a gc-canonical managed_city scope", err)
+	}
+}
+
 // A pid file naming a process that is gone is the crash case: bd's record
 // outlived its server. It must not be mistaken for a live binding.
 func TestResolveDoltConnectionTargetIgnoresDeadBdServerRecord(t *testing.T) {

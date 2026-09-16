@@ -2282,6 +2282,20 @@ func managedLocalDoltChecksApplicableForScopeRoots(cityPath string, scopeRoots [
 		if !scopeUsesBDDoltStore(cityPath, scopeRoot) {
 			continue
 		}
+		// Three arms, not two: managed-local, bd-owned proxied, external. A city
+		// migrated with `gc beads city migrate-proxied` keeps
+		// gc.endpoint_origin: managed_city in its canonical config — the managed
+		// city is still where its rigs inherit from — but its Dolt is bd's
+		// proxied server now and migrate-proxied retired gc's dolt-config.yaml on
+		// purpose. Classifying it as managed-local produced a permanent
+		// 'dolt-config — managed dolt-config.yaml not found' warning whose fix
+		// hint (gc start / gc dolt restart) is a typed no-op on a proxied scope:
+		// a doctor line no operator can ever clear, on the documented migration
+		// path. Ask bd's own binding, which is the authority for who runs the
+		// process.
+		if doctorScopeIsBdOwnedProxied(cityPath, scopeRoot) {
+			continue
+		}
 
 		resolved, err := contract.ResolveScopeConfigState(fsys.OSFS{}, cityPath, scopeRoot, "")
 		if err != nil {
@@ -2305,6 +2319,25 @@ func managedLocalDoltChecksApplicableForScopeRoots(cityPath string, scopeRoots [
 		}
 	}
 	return false
+}
+
+// doctorScopeIsBdOwnedProxied reports whether the scope's Dolt is bd's proxied
+// server rather than a server gc would start.
+//
+// bd's committed metadata.json answers first: it is the durable binding, and a
+// scope carries it whether gc journaled the initialization or `bd migrate` wrote
+// it in place. The resolved authoritative state is the fallback for a scope
+// whose metadata is unreadable but whose canonical config still records the
+// mode.
+func doctorScopeIsBdOwnedProxied(cityPath, scopeRoot string) bool {
+	if scopeBindingIsProviderOwnedProxied(scopeRoot) {
+		return true
+	}
+	resolved, err := contract.ResolveScopeConfigState(fsys.OSFS{}, cityPath, scopeRoot, "")
+	if err != nil || resolved.Kind != contract.ScopeConfigAuthoritative {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(resolved.State.DoltMode), "proxied-server")
 }
 
 func inheritedDoctorScopeUsesManagedCity(cityPath string) bool {

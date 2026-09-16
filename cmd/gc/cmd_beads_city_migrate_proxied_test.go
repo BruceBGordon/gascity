@@ -54,7 +54,7 @@ func TestMigrateProxiedRefusesWhileManagedDoltStateIsPublished(t *testing.T) {
 	if got := mustReadFile(t, filepath.Join(city, ".beads", "metadata.json")); !bytes.Equal(got, before) {
 		t.Fatalf("metadata.json was rewritten by a refused migration:\n%s", got)
 	}
-	if _, err := os.Stat(filepath.Join(city, ".beads", "migrate-dolt-mode.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(city, ".beads", contract.MigrateDoltModeJournalFile)); !os.IsNotExist(err) {
 		t.Fatalf("a refused migration left a bd journal behind: %v", err)
 	}
 }

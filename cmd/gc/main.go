@@ -1720,10 +1720,7 @@ func openExecStoreAtForCityWithConfig(provider, scopeRoot, runtimeCityPath strin
 	if err != nil {
 		return nil, err
 	}
-	env, err := gcExecStoreEnv(runtimeCityPath, target, provider)
-	if err != nil {
-		return nil, err
-	}
+	env := gcExecStoreEnv(runtimeCityPath, target, provider)
 	if execProviderNeedsScopedDoltStoreEnv(provider) {
 		if target.ScopeKind == "rig" {
 			rigCfg := cfg

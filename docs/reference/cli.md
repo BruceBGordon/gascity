@@ -348,6 +348,12 @@ city to an external Dolt endpoint and rewrite inherited rig mirrors. Use
 migrate-proxied to move a legacy GC-managed city onto bd's proxied-server
 topology.
 
+use-managed and use-external manage gc-owned endpoint topology only. They refuse
+a city whose store the beads provider owns — one journaled in
+.gc/scope-ownership.json, one transferred by the ownership handoff, or one bd's
+metadata binds to the proxied-server path — because that endpoint lives in bd's
+own files and is bd's to change.
+
 ```
 gc beads city
 ```
@@ -3707,7 +3713,9 @@ Use --self to mark the rig as running its own local Dolt server on
 command requires --force because the rig's .beads/dolt-server.port mirror
 will no longer track the managed city Dolt.
 
-This command owns the rig's canonical .beads/config.yaml topology state.
+This command owns the rig's canonical .beads/config.yaml topology state. It
+refuses a rig whose store the beads provider owns: that rig's endpoint lives in
+bd's own files and is bd's to change.
 
 ```
 gc rig set-endpoint <rig> [flags]

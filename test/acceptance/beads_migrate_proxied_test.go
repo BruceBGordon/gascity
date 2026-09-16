@@ -38,6 +38,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/beads/contract"
 	helpers "github.com/gastownhall/gascity/test/acceptance/helpers"
 )
 
@@ -257,6 +258,16 @@ func TestBeadsMigrateLegacyCityToProxied(t *testing.T) {
 			t.Logf("gc doctor --fix reported work outstanding: %v\n%s", err, out)
 		}
 		assertDoctorGreen(t, city, "a migrated legacy city")
+		// migrate-proxied retires gc's dolt-config.yaml on purpose — gc will
+		// never start a server for this city again — so the managed-Dolt checks
+		// must stop applying to it. If doctor still classifies the migrated city
+		// as managed-local, dolt-config warns that the retired file is "not
+		// found" and names two commands that are typed no-ops on a proxied scope:
+		// a line the runbook's own `gc doctor --fix && gc doctor` step surfaces
+		// and nothing can clear. assertDoctorGreen counts it now that
+		// beadsTopologyCheck lists dolt-config; this states the expectation by
+		// name so a regression says which check regressed.
+		assertCheckOK(t, city, "dolt-config", "a migrated legacy city")
 		// Migration moves the city off gc's managed server and onto bd's proxy,
 		// which is also the moment its backup coverage goes to zero: the rig
 		// shares the city's proxy root, and rc.2 refuses backup on that path.
@@ -387,7 +398,7 @@ func TestBeadsMigrateProxiedRefusesLiveLegacyServer(t *testing.T) {
 	if string(after) != string(before) {
 		t.Errorf("a refused migration rewrote metadata.json:\nbefore %s\nafter  %s", before, after)
 	}
-	if _, err := os.Stat(filepath.Join(cityRoot, ".beads", "migrate-dolt-mode.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(cityRoot, ".beads", contract.MigrateDoltModeJournalFile)); !os.IsNotExist(err) {
 		t.Errorf("a refused migration left bd's migration journal behind: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(cityRoot, ".beads", "proxied_server_client_info.json")); !os.IsNotExist(err) {

@@ -213,13 +213,48 @@ func migrateProxiedScopeOutcome(cityPath string, scope migrateProxiedScope, opts
 		result.Status = migrateProxiedStatusAlready
 		result.DoltMode = "proxied-server"
 		result.Detail = "metadata.json already records proxied-server"
-		// An already-migrated scope can still carry gc's stale config keys —
-		// normalising them is idempotent and is the whole point of step (f).
-		if !opts.DryRun {
-			if err := normalizeMigratedScopeConfig(cityPath, scope); err != nil {
+		// proxied-server in metadata.json is not the same as a finished
+		// migration. bd writes the mode at phase `prepared` and removes its
+		// journal only at `committed`, so a scope whose bd died in between reads
+		// as already-proxied while its sidecar may be missing and its old
+		// dolt-server controls un-retired. bd can resume from its own journal;
+		// reporting already-migrated here is how that repair never happens.
+		inFlight, err := scopeMigrationInFlight(scope.Path)
+		if err != nil {
+			result.Status = migrateProxiedStatusFailed
+			result.Error = err.Error()
+			return result
+		}
+		if opts.DryRun {
+			if inFlight {
+				result.Status = migrateProxiedStatusPlanned
+				result.Detail = "resume interrupted bd migration (" + contract.MigrateDoltModeJournalFile + " present); bd migrate from-server-to-proxied-server; rewrite .beads/config.yaml; bd ping"
+			}
+			return result
+		}
+		if inFlight {
+			if err := resumeInterruptedScopeMigration(cityPath, scope); err != nil {
 				result.Status = migrateProxiedStatusFailed
 				result.Error = err.Error()
+				return result
 			}
+			result.Status = migrateProxiedStatusMigrated
+			result.Detail = "resumed bd's interrupted migration"
+		}
+		// An already-migrated scope can still carry gc's stale config keys —
+		// normalising them is idempotent and is the whole point of step (f).
+		if err := normalizeMigratedScopeConfig(cityPath, scope); err != nil {
+			result.Status = migrateProxiedStatusFailed
+			result.Error = err.Error()
+			return result
+		}
+		if inFlight {
+			if err := pingMigratedScope(cityPath, scope); err != nil {
+				result.Status = migrateProxiedStatusFailed
+				result.Error = fmt.Sprintf("migrated but not ready: %v", err)
+				return result
+			}
+			result.Detail = "resumed bd's interrupted migration; bd ping ok"
 		}
 		return result
 	}
@@ -285,6 +320,17 @@ func migrateProxiedScopeNow(cityPath string, scope migrateProxiedScope, classifi
 	if err := requireNoManagedDoltServer(cityPath); err != nil {
 		return err
 	}
+	if err := runScopeMigrateToProxied(cityPath, scope); err != nil {
+		return err
+	}
+	if err := requireScopeMigrationCommitted(scope.Path); err != nil {
+		return err
+	}
+	return normalizeMigratedScopeConfig(cityPath, scope)
+}
+
+// runScopeMigrateToProxied hands the scope to bd's own migration verb.
+func runScopeMigrateToProxied(cityPath string, scope migrateProxiedScope) error {
 	args := []string{"migrate", "from-server-to-proxied-server", "--idle-timeout", migrateProxiedIdleTimeoutFlag}
 	if migrateProxiedSupportsJSON(cityPath, scope.Path) {
 		args = append(args, "--json")
@@ -293,10 +339,41 @@ func migrateProxiedScopeNow(cityPath string, scope migrateProxiedScope, classifi
 	if err != nil {
 		return fmt.Errorf("bd migrate from-server-to-proxied-server: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	if err := requireScopeMigrationCommitted(scope.Path); err != nil {
+	return nil
+}
+
+// resumeInterruptedScopeMigration replays the phases bd did not reach.
+//
+// bd exempts its four mode-migration verbs from the proxied store-init path and
+// loads its journal on entry, so rerunning the same command is how a half-
+// finished flip is finished. Re-fence first: the entry fence ran an unbounded
+// number of scopes ago, and bd's own running-server check consults only its own
+// .beads/dolt-server.pid, which gc never writes.
+func resumeInterruptedScopeMigration(cityPath string, scope migrateProxiedScope) error {
+	if err := requireNoManagedDoltServer(cityPath); err != nil {
 		return err
 	}
-	return normalizeMigratedScopeConfig(cityPath, scope)
+	if err := runScopeMigrateToProxied(cityPath, scope); err != nil {
+		return fmt.Errorf("resume interrupted migration for %s: %w", scope.Label, err)
+	}
+	return requireScopeMigrationCommitted(scope.Path)
+}
+
+// scopeMigrationJournalPath is where bd keeps the in-flight record of a
+// mode migration for this scope.
+func scopeMigrationJournalPath(scopeRoot string) string {
+	return filepath.Join(scopeRoot, ".beads", contract.MigrateDoltModeJournalFile)
+}
+
+// scopeMigrationInFlight reports whether bd left a migration journal behind,
+// which it does for every phase from `prepared` until `committed`.
+func scopeMigrationInFlight(scopeRoot string) (bool, error) {
+	if _, err := os.Stat(scopeMigrationJournalPath(scopeRoot)); err == nil {
+		return true, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("inspect bd migration journal for %s: %w", scopeRoot, err)
+	}
+	return false, nil
 }
 
 // requireScopeMigrationCommitted verifies bd's own outcome rather than its exit
@@ -310,11 +387,12 @@ func requireScopeMigrationCommitted(scopeRoot string) error {
 	if !ok || !strings.EqualFold(strings.TrimSpace(mode), "proxied-server") {
 		return fmt.Errorf("bd reported success but %s still records dolt_mode %q", scopeMetadataJSONPath(scopeRoot), strings.TrimSpace(mode))
 	}
-	journal := filepath.Join(scopeRoot, ".beads", "migrate-dolt-mode.json")
-	if _, err := os.Stat(journal); err == nil {
-		return fmt.Errorf("bd left its migration journal behind at %s; the migration did not commit", journal)
-	} else if !errors.Is(err, os.ErrNotExist) {
+	inFlight, err := scopeMigrationInFlight(scopeRoot)
+	if err != nil {
 		return err
+	}
+	if inFlight {
+		return fmt.Errorf("bd left its migration journal behind at %s; the migration did not commit", scopeMigrationJournalPath(scopeRoot))
 	}
 	return nil
 }
@@ -372,7 +450,15 @@ func retireManagedDoltResidue(cityPath string, scope migrateProxiedScope) error 
 	if !scope.IsCity {
 		return nil
 	}
-	layout, err := resolveManagedDoltRuntimeLayout(cityPath)
+	// Strict, not the env-honoring resolver: this step selects files to delete,
+	// and the city it deletes them for is the one --city named. The ambient
+	// GC_PACK_STATE_DIR / GC_CITY_RUNTIME_DIR / GC_DOLT_* a gc-spawned agent
+	// session carries describe whatever city spawned it, and the entry fence
+	// above already reads the hardcoded managedDoltStatePath — so honoring env
+	// here would let `gc --city A beads city migrate-proxied`, run from a city-B
+	// session, pass A's fence and remove B's pid, lock, config, log and
+	// provider-state files.
+	layout, err := resolveManagedDoltRuntimeLayoutStrict(cityPath)
 	if err != nil {
 		return fmt.Errorf("resolve managed dolt runtime layout: %w", err)
 	}

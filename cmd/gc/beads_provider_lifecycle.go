@@ -127,6 +127,15 @@ func registerCityDoltConfigIfAbsent(cityPath string, cfg config.DoltConfig) (add
 	return !loaded
 }
 
+// bestEffortProviderLifecycleGCBinary resolves GC_BIN for a legacy managed
+// provider env without refusing. See pinBdGCEnvironmentBestEffort.
+func bestEffortProviderLifecycleGCBinary() string {
+	if gcBin, err := resolveProviderLifecycleGCBinary(); err == nil {
+		return gcBin
+	}
+	return bestEffortInvokingGCBinary()
+}
+
 var resolveProviderLifecycleGCBinary = func() (string, error) {
 	if isTestBinary() {
 		// Lifecycle tests deliberately inject a fake GC_BIN into their child
@@ -610,13 +619,12 @@ func desiredScopeDoltConfigStateForInit(cityPath, dir, prefix string) (contract.
 // still works; `gc doctor` reports the drift and `--fix` reconciles it with
 // this same call. Failing the whole init over a cache that doctor owns would
 // destroy a city that is otherwise complete.
-func registerProviderOwnedScopeCustomTypes(dir string) {
-	env := map[string]string{"BEADS_DIR": filepath.Join(dir, ".beads")}
-	if err := pinBdGCEnvironment(env); err != nil {
+func registerProviderOwnedScopeCustomTypes(cityPath, dir string) {
+	env, err := providerOwnedScopeCustomTypesEnv(cityPath, dir)
+	if err != nil {
 		log.Printf("gc: custom bead types not registered for %s: %v", dir, err)
 		return
 	}
-	applyExportSuppressionEnv(env)
 	run := beads.ExecCommandRunnerWithEnv(env)
 
 	out, err := run(dir, "bd", "config", "get", "--json", "types.custom")
@@ -637,6 +645,31 @@ func registerProviderOwnedScopeCustomTypes(dir string) {
 	if _, err := run(dir, "bd", "config", "set", "types.custom", strings.Join(doctor.RequiredCustomTypes, ",")); err != nil {
 		log.Printf("gc: custom bead types not registered for %s: %v; run `gc doctor --fix`", dir, err)
 	}
+}
+
+// providerOwnedScopeCustomTypesEnv builds the env for the two `bd config` calls
+// above.
+//
+// It is the same projection every other bd call in this file uses — the
+// workspace's pinned BD_BIN, the scope's proxied/direct selectors, the GC_BIN
+// pin, export suppression — rather than a hand-rolled BEADS_DIR map. The bd init
+// this follows ran through cityRuntimeProcessEnvWithError and therefore honored
+// a city.toml `[workspace.env] BD_BIN`; running the follow-up against whatever
+// `bd` PATH resolves to would talk to a different binary than the one that
+// created the store, and for a proxied scope a different one than owns the proxy.
+func providerOwnedScopeCustomTypesEnv(cityPath, dir string) (map[string]string, error) {
+	provider := beadsProvider(cityPath)
+	base, err := providerLifecycleProcessEnvForScopeInitWithError(cityPath, dir, provider)
+	if err != nil {
+		return nil, err
+	}
+	env := runtimeEnvEntriesToMap(base)
+	if err := applyWorkspacePinnedBdBinary(env, cityPath); err != nil {
+		return nil, err
+	}
+	env["BEADS_DIR"] = filepath.Join(dir, ".beads")
+	applyExportSuppressionEnv(env)
+	return env, nil
 }
 
 //nolint:unparam // keep fs seam for future testable FS injection
@@ -805,7 +838,7 @@ func initAndHookDir(cityPath, dir, prefix string) error {
 		if err != nil {
 			return err
 		}
-		registerProviderOwnedScopeCustomTypes(dir)
+		registerProviderOwnedScopeCustomTypes(cityPath, dir)
 		if err := installBeadHooks(dir, cityPath); err != nil {
 			return fmt.Errorf("install hooks at %s: %w", dir, err)
 		}
@@ -1174,12 +1207,25 @@ func runProviderOwnedScopesLifecycleOp(cityPath, op string) error {
 }
 
 func runProviderOwnedScopesLifecycleOpContext(parent context.Context, cityPath, op string) error {
+	_, err := runProviderOwnedScopesLifecycleOpReportingFailures(parent, cityPath, op)
+	return err
+}
+
+// runProviderOwnedScopesLifecycleOpReportingFailures runs op across the city's
+// provider-owned scopes and additionally reports which scope roots failed.
+//
+// Recovery needs the set, not just the verdict. `recover` is `bd dolt stop`
+// followed by `bd ping`: issued to a scope whose health passed it retires a
+// working proxy child and its dolt sql-server under live agents, so a single
+// flaky rig must not cycle the city's Dolt and every other rig's.
+func runProviderOwnedScopesLifecycleOpReportingFailures(parent context.Context, cityPath, op string) ([]string, error) {
 	scopes, err := providerOwnedLifecycleScopeRoots(cityPath, op)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	everyScope := providerOwnedOpVisitsEveryScope(op)
 	var failures []error
+	var failed []string
 	for _, scopeRoot := range scopes {
 		owned, err := scopeProviderOwned(cityPath, scopeRoot)
 		if err == nil && !owned {
@@ -1191,13 +1237,41 @@ func runProviderOwnedScopesLifecycleOpContext(parent context.Context, cityPath, 
 				continue
 			}
 		}
+		failed = append(failed, scopeRoot)
 		err = fmt.Errorf("provider-owned scope %q %s: %w", scopeRoot, op, err)
 		if !everyScope {
-			return err
+			return failed, err
 		}
 		failures = append(failures, err)
 	}
+	return failed, errors.Join(failures...)
+}
+
+// runProviderOwnedScopeRootsLifecycleOp runs op against exactly the given scope
+// roots, joining every failure rather than stopping at the first: these are the
+// scopes already known to be unhealthy, and one that cannot be recovered must
+// not hide the outcome of the others.
+func runProviderOwnedScopeRootsLifecycleOp(parent context.Context, cityPath string, scopeRoots []string, op string) error {
+	var failures []error
+	for _, scopeRoot := range scopeRoots {
+		if err := runProviderOwnedScopeLifecycleOpContext(parent, cityPath, scopeRoot, op); err != nil {
+			failures = append(failures, fmt.Errorf("provider-owned scope %q %s: %w", scopeRoot, op, err))
+		}
+	}
 	return errors.Join(failures...)
+}
+
+// recoverUnhealthyProviderOwnedScopes recovers only the scopes whose health
+// failed and then re-checks only those. It returns the joined error of whatever
+// is still unhealthy.
+func recoverUnhealthyProviderOwnedScopes(ctx context.Context, cityPath string, unhealthy []string) error {
+	if len(unhealthy) == 0 {
+		return nil
+	}
+	if err := runProviderOwnedScopeRootsLifecycleOp(ctx, cityPath, unhealthy, "recover"); err != nil {
+		return err
+	}
+	return runProviderOwnedScopeRootsLifecycleOp(ctx, cityPath, unhealthy, "health")
 }
 
 // hasProviderOwnedRigScope reports whether any non-city scope op would visit
@@ -1946,25 +2020,22 @@ func healthBeadsProviderContext(ctx context.Context, cityPath string, waitForSco
 	if owned, err := cityScopeProviderOwned(cityPath); err != nil {
 		return err
 	} else if owned {
-		if err := runProviderOwnedScopesLifecycleOpContext(ctx, cityPath, "health"); err == nil {
+		unhealthy, err := runProviderOwnedScopesLifecycleOpReportingFailures(ctx, cityPath, "health")
+		if err == nil {
 			return nil
-		} else if recoverErr := runProviderOwnedScopesLifecycleOpContext(ctx, cityPath, "recover"); recoverErr != nil {
-			return fmt.Errorf("provider-owned scope unhealthy (%w) and recovery failed: %w", err, recoverErr)
 		}
-		if err := runProviderOwnedScopesLifecycleOpContext(ctx, cityPath, "health"); err != nil {
-			return fmt.Errorf("provider-owned scope unhealthy after recovery: %w", err)
+		if recoverErr := recoverUnhealthyProviderOwnedScopes(ctx, cityPath, unhealthy); recoverErr != nil {
+			return fmt.Errorf("provider-owned scope unhealthy (%w) and recovery failed: %w", err, recoverErr)
 		}
 		return nil
 	}
 	if ownedRig, err := hasProviderOwnedRigScope(cityPath, "health"); err != nil {
 		return err
 	} else if ownedRig {
-		if err := runProviderOwnedScopesLifecycleOpContext(ctx, cityPath, "health"); err != nil {
-			if recoverErr := runProviderOwnedScopesLifecycleOpContext(ctx, cityPath, "recover"); recoverErr != nil {
+		unhealthy, err := runProviderOwnedScopesLifecycleOpReportingFailures(ctx, cityPath, "health")
+		if err != nil {
+			if recoverErr := recoverUnhealthyProviderOwnedScopes(ctx, cityPath, unhealthy); recoverErr != nil {
 				return fmt.Errorf("provider-owned rig scope unhealthy (%w) and recovery failed: %w", err, recoverErr)
-			}
-			if err := runProviderOwnedScopesLifecycleOpContext(ctx, cityPath, "health"); err != nil {
-				return fmt.Errorf("provider-owned rig scope unhealthy after recovery: %w", err)
 			}
 		}
 	}
@@ -3265,6 +3336,11 @@ func providerLifecycleProcessEnvFromBase(cityPath, provider string, env []string
 	if !providerUsesBdStoreContract(provider) {
 		return env, nil
 	}
+	// Strict, before any early branch: this env is what gc hands the provider
+	// script, and bd re-invokes gc through it. An unverifiable GC_BIN here is a
+	// refusal, not a warning. The legacy-only bd runners (bd_env.go's managed
+	// retry runner, gcExecStoreEnv, recoverManagedBDCommand) degrade instead —
+	// see pinBdGCEnvironmentBestEffort.
 	gcBin, err := resolveProviderLifecycleGCBinary()
 	if err != nil {
 		return nil, fmt.Errorf("resolve invoking gc executable: %w", err)

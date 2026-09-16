@@ -54,9 +54,8 @@ func beadsCommandRunnerWithContextForHostedCity(ctx context.Context, cityPath st
 	if env == nil {
 		env = make(map[string]string)
 	}
-	if err := pinBdGCEnvironment(env); err != nil {
-		return nil, err
-	}
+	// Store opens degrade rather than refuse: see pinBdGCEnvironmentBestEffort.
+	pinBdGCEnvironmentBestEffort(env)
 	selected, err := citySelectsHostedBeadsCredentialProvider(cityPath)
 	if err != nil {
 		return nil, err

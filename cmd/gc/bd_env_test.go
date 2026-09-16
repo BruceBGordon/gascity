@@ -603,7 +603,13 @@ func TestRecoverManagedBDCommandCarriesWorkspaceBDBinaryPin(t *testing.T) {
 	}
 }
 
-func TestRecoverManagedBDCommandStopsBeforeChildWhenGCBinaryResolutionFails(t *testing.T) {
+// Recovering the legacy managed server is the path an in-place gc upgrade most
+// needs to keep working: the supervisor that calls it is already running, and an
+// upgrade that removed the directory /proc/self/exe resolved through leaves it
+// unable to canonicalize its own binary. main pinned no GC_BIN here at all, so
+// refusing turned a bounded staleness into a recover that can never run — and
+// with it, a managed Dolt nothing stops on SIGTERM. The pin degrades instead.
+func TestRecoverManagedBDCommandRunsWhenGCBinaryResolutionFails(t *testing.T) {
 	cityPath := t.TempDir()
 	capture := filepath.Join(t.TempDir(), "recover-ran")
 	scriptPath := gcBeadsBdScriptPath(cityPath)
@@ -618,12 +624,11 @@ func TestRecoverManagedBDCommandStopsBeforeChildWhenGCBinaryResolutionFails(t *t
 	resolveProviderLifecycleGCBinary = func() (string, error) { return "", errors.New("unavailable") }
 	t.Cleanup(func() { resolveProviderLifecycleGCBinary = original })
 
-	err := recoverManagedBDCommand(cityPath)
-	if err == nil || !strings.Contains(err.Error(), "unavailable") {
-		t.Fatalf("recoverManagedBDCommand() error = %v, want resolver failure", err)
+	if err := recoverManagedBDCommand(cityPath); err != nil {
+		t.Fatalf("recoverManagedBDCommand() = %v, want the recover to run anyway", err)
 	}
-	if _, statErr := os.Stat(capture); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("recover child ran despite resolver failure; stat err = %v", statErr)
+	if _, statErr := os.Stat(capture); statErr != nil {
+		t.Fatalf("recover child never ran: %v", statErr)
 	}
 }
 
