@@ -147,6 +147,52 @@ func TestDoBdAssigneeGateNewAliasResolvesLikeCreate(t *testing.T) {
 	}
 }
 
+// TestDoBdAssigneeGateCompletedAliasesResolve is the gc-0nf9kp round-4
+// regression: bd registers create/new, close/done, show/view and mol/
+// protomolecule, but bdSubcommandAliases carried only "new" and the compound
+// branch in bdByIDSubcommand composed its two-token key from the raw,
+// unnormalized token, so "protomolecule pour <id> --assignee X" resolved to
+// neither "protomolecule pour" nor "mol" and walked straight past the gate —
+// exit 0, bd invoked, phantom assignee written, no refusal. "mol pour" (the
+// canonical spelling) was, and remains, correctly refused; this pins that the
+// alias resolves identically to its canonical form for every completed
+// alias, not just the two-token one that broke.
+func TestDoBdAssigneeGateCompletedAliasesResolve(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		args        []string
+		wantRefused bool
+	}{
+		{"protomolecule_pour_refuses", []string{"protomolecule", "pour", "proto-1", "--assignee", "phantom-owner"}, true},
+		{"mol_pour_unchanged_still_refuses", []string{"mol", "pour", "proto-1", "--assignee", "phantom-owner"}, true},
+		{"protomolecule_pour_no_assignee_passes", []string{"protomolecule", "pour", "proto-1"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			marker := gateWiringCity(t)
+			var stdout, stderr bytes.Buffer
+			got := doBd(tc.args, &stdout, &stderr)
+			if tc.wantRefused {
+				if got == 0 {
+					t.Fatalf("doBd(%v) = 0, want refusal; stderr=%q", tc.args, stderr.String())
+				}
+				if !strings.Contains(stderr.String(), "matches no configured agent") {
+					t.Errorf("refusal did not explain itself: %q", stderr.String())
+				}
+				if bdRan(t, marker) {
+					t.Errorf("bd was invoked despite the refusal")
+				}
+				return
+			}
+			if got != 0 {
+				t.Fatalf("doBd(%v) = %d, want 0; stderr=%q", tc.args, got, stderr.String())
+			}
+			if !bdRan(t, marker) {
+				t.Errorf("bd was not invoked although the gate should have passed it through")
+			}
+		})
+	}
+}
+
 // The negative rail. A routable assignee must pass straight through, or the
 // gate is just an outage.
 func TestDoBdPermitsRoutableAssignee(t *testing.T) {

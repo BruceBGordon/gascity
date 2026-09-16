@@ -89,9 +89,10 @@ rather than a refused write, which is the right way round: a false refusal on
 an unrelated command teaches operators to bypass the gate.
 
 **It normalizes bd's subcommand aliases before resolving them.** `bd`
-registers `new` as an alias for `create` (`bd create --help` prints "Aliases:
-create, new"), but `bdflags` keys every manifest under the canonical verb only
-and performs no alias normalization itself. A reader that resolves a verb via
+registers four alias pairs: `create`/`new`, `close`/`done`, `show`/`view`, and
+`mol`/`protomolecule` (each discoverable via `bd <verb> --help`'s "Aliases:"
+section). `bdflags` keys every manifest under the canonical verb only and
+performs no alias normalization itself. A reader that resolves a verb via
 `bdflags.Known` without normalizing first silently drops the alias — and
 `create` is the feature's primary write verb, so a bare `bd new --assignee
 ghost` would otherwise walk straight past the gate. `bdNormalizeSubcommandAlias`
@@ -99,6 +100,19 @@ is the one place this normalization happens, and both `bdByIDSubcommand` (used
 by the flag-form extraction here and by the by-ID door) and
 `bdRigQualifiedMetadataRefusal` normalize through it, so the alias cannot drift
 out of sync between readers again.
+
+For the compound two-token verbs (`mol pour` / `protomolecule pour`),
+normalization has to happen *before* the compound key is composed, not after:
+`bdByIDSubcommand` used to build the key `"<token> <next>"` from the raw argv
+token, so `protomolecule pour` produced `"protomolecule pour"`, which
+`bdflags.Known` has never heard of (only `"mol pour"` is registered) — the
+write fell through unresolved and the gate never saw it. The fix normalizes
+the first token through `bdNormalizeSubcommandAlias` before composing the
+compound key. `bd_subcommand_aliases_freshness_test.go` (`//go:build
+integration`) guards the alias table itself the same way
+`internal/bdflags`'s freshness test guards the flag manifest: it shells the
+real installed `bd`'s `--help` per canonical verb and fails if the live CLI
+declares an alias the table doesn't carry, skipping if `bd` isn't on `PATH`.
 
 Ordering is load-bearing and was established by a test failure rather than by
 design. `gc bd` already carries a pre-flight exact-ID guard that resolves bead
