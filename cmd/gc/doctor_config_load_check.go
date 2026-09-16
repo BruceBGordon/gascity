@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/gastownhall/gascity/internal/doctor"
 )
@@ -36,14 +37,22 @@ func (c *configLoadCheck) WarmupEligible() bool { return false }
 
 func (c *configLoadCheck) Fix(_ *doctor.CheckContext) error { return nil }
 
-func (c *configLoadCheck) Run(_ *doctor.CheckContext) *doctor.CheckResult {
-	if c.err == nil {
+func (c *configLoadCheck) Run(ctx *doctor.CheckContext) *doctor.CheckResult {
+	// Re-load live rather than trust the cfgErr captured at registration time:
+	// an earlier check in the same run (e.g. v2-formulas-dir) may have fixed
+	// the config on disk since then, and this check must reflect that, the
+	// same way expanded-config-load does.
+	err := c.err
+	if ctx != nil && ctx.CityPath != "" {
+		_, err = loadCityConfig(ctx.CityPath, io.Discard)
+	}
+	if err == nil {
 		return okCheck(c.Name(), "full config load succeeded; config-dependent checks are registered")
 	}
 	return &doctor.CheckResult{
 		Name:    c.Name(),
 		Status:  doctor.StatusError,
-		Message: fmt.Sprintf("full config load failed, so config-dependent checks did not run: %v", c.err),
+		Message: fmt.Sprintf("full config load failed, so config-dependent checks did not run: %v", err),
 		FixHint: "fix the config load (start with packv2-import-state and city-config), then rerun gc doctor; until then this report is incomplete",
 	}
 }

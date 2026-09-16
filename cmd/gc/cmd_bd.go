@@ -457,6 +457,18 @@ func doBd(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	// The assignee gate runs before the exact-ID guard below: it is a pure
+	// config check with no store access, and the guard's store.Get can fall
+	// back to shelling out to the real bd binary (native-store-unavailable
+	// fallback) — a refusal here must precede that, not merely precede the
+	// forwarded mutation.
+	if !assigneeGateBypassed() {
+		if err := checkBdAssigneeArgs(cfg, bdArgs, stderr); err != nil {
+			fmt.Fprintf(stderr, "gc bd: %v\n", err) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+	}
+
 	// Pre-flight exact-ID guard for write-mutating subcommands (gcy-g4o).
 	// bd's fuzzy/substring resolver can silently match a longer ID that
 	// contains the supplied ID as a substring (e.g. "gcy-dv7" → "gcy-wisp-dv78").
