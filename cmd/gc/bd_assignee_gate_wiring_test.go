@@ -102,6 +102,51 @@ func TestDoBdRefusesUnroutableAssigneeBeforeInvokingBd(t *testing.T) {
 	}
 }
 
+// bd registers `new` as an alias for `create` (bd create --help: "Aliases:
+// create, new"). bdflags keys its manifests under the canonical verb only, so
+// a reader that resolves the subcommand via bdflags.Known without normalizing
+// the alias first never recognizes "new" and the whole gate is skipped for
+// the feature's primary write verb. This must exercise doBd end to end, the
+// same way TestDoBdRefusesUnroutableAssigneeBeforeInvokingBd does for
+// "update"/"assign", because a unit test on the helper alone would not catch
+// the wiring dropping the alias.
+func TestDoBdAssigneeGateNewAliasResolvesLikeCreate(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		args        []string
+		wantRefused bool
+	}{
+		{"new_flag_separated_refuses", []string{"new", "-t", "task", "--assignee", "phantom-owner"}, true},
+		{"new_flag_equals_refuses", []string{"new", "-t", "task", "--assignee=phantom-owner"}, true},
+		{"create_unchanged_still_refuses", []string{"create", "-t", "task", "--assignee", "phantom-owner"}, true},
+		{"new_no_assignee_passes", []string{"new", "-t", "task"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			marker := gateWiringCity(t)
+			var stdout, stderr bytes.Buffer
+			got := doBd(tc.args, &stdout, &stderr)
+			if tc.wantRefused {
+				if got == 0 {
+					t.Fatalf("doBd(%v) = 0, want refusal; stderr=%q", tc.args, stderr.String())
+				}
+				if !strings.Contains(stderr.String(), "matches no configured agent") {
+					t.Errorf("refusal did not explain itself: %q", stderr.String())
+				}
+				if bdRan(t, marker) {
+					t.Errorf("bd was invoked despite the refusal")
+				}
+				return
+			}
+			if got != 0 {
+				t.Fatalf("doBd(%v) = %d, want 0; stderr=%q", tc.args, got, stderr.String())
+			}
+			if !bdRan(t, marker) {
+				t.Errorf("bd was not invoked although the gate should have passed it through")
+			}
+		})
+	}
+}
+
 // The negative rail. A routable assignee must pass straight through, or the
 // gate is just an outage.
 func TestDoBdPermitsRoutableAssignee(t *testing.T) {

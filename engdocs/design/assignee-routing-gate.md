@@ -64,24 +64,41 @@ problem look like a bad assignee.
 anyway. Legitimate flows assign to targets that do not exist yet, and a gate
 with no documented way past it gets bypassed in ways nobody can audit.
 
-**It anchors on the `assign` subcommand itself, and it runs first.** Assignees
-arrive four ways: `--assignee x`, `-a x`, `--assignee=x`/`-a=x`, the attached
-short form `-aX`, and the second operand of `bd assign <id> <who>`.
-`positionalAssignArg` finds the subcommand by matching the bare token `assign`,
-and must still tell that occurrence apart from the same word appearing as a
-flag *value* (`bd list --label assign foo bar`). The token immediately before
-`assign` only donates it as a value when that token is itself a
-value-consuming global flag — checking merely "does the preceding token start
-with a dash" is wrong, because bd's global *boolean* flags (`--json`, `-q`,
-`--global`, ...) take no value and sit directly before the verb, so
-`bd --json assign` and `bd -q assign` both reach the real subcommand. The gate
-also steps over valued flags placed after the subcommand (including
-`--format`) so their values are not mistaken for operands. Both the
+**It anchors on the actual subcommand, and it runs first.** Assignees arrive
+four ways: `--assignee x`, `-a x`, `--assignee=x`/`-a=x`, the attached short
+form `-aX`, and the second operand of `bd assign <id> <who>`. The flag forms
+are scoped by `bdByIDSubcommand`, which walks bd's *global* flag grammar to
+find the token that must be the subcommand, then resolves it — this is the
+same subcommand locator the by-ID door uses, so the two mechanisms cannot
+disagree about where the verb sits. The positional form is found separately by
+`positionalAssignArg`, which locates the literal token `assign` at that same
+index (via `firstBdSubcommandCandidateIndex`) rather than by taking the first
+non-flag argument as the subcommand, and must still tell that occurrence apart
+from the same word appearing as a flag *value* (`bd list --label assign foo
+bar`). The token immediately before `assign` only donates it as a value when
+that token is itself a value-consuming global flag — checking merely "does the
+preceding token start with a dash" is wrong, because bd's global *boolean*
+flags (`--json`, `-q`, `--global`, ...) take no value and sit directly before
+the verb, so `bd --json assign` and `bd -q assign` both reach the real
+subcommand. The gate also steps over valued flags placed after the subcommand
+(including `--format`) so their values are not mistaken for operands. Both the
 value-flag and boolean-flag manifests are sourced from `internal/bdflags`
 rather than hand-copied, so they cannot silently drift from what `bd` actually
 accepts. Where a spelling is still unrecognized the result is a missed check
 rather than a refused write, which is the right way round: a false refusal on
 an unrelated command teaches operators to bypass the gate.
+
+**It normalizes bd's subcommand aliases before resolving them.** `bd`
+registers `new` as an alias for `create` (`bd create --help` prints "Aliases:
+create, new"), but `bdflags` keys every manifest under the canonical verb only
+and performs no alias normalization itself. A reader that resolves a verb via
+`bdflags.Known` without normalizing first silently drops the alias — and
+`create` is the feature's primary write verb, so a bare `bd new --assignee
+ghost` would otherwise walk straight past the gate. `bdNormalizeSubcommandAlias`
+is the one place this normalization happens, and both `bdByIDSubcommand` (used
+by the flag-form extraction here and by the by-ID door) and
+`bdRigQualifiedMetadataRefusal` normalize through it, so the alias cannot drift
+out of sync between readers again.
 
 Ordering is load-bearing and was established by a test failure rather than by
 design. `gc bd` already carries a pre-flight exact-ID guard that resolves bead
@@ -172,9 +189,13 @@ that says what could ever pick work up.
 
 ## Open questions
 
-- The roster treats `human` and `mayor` as reserved. Whether other
-  cross-cutting identities deserve the same treatment is unsettled, and adding
-  them is a config question rather than a code one.
+- The roster treats `human` as reserved: a fixed sentinel meaning a person is
+  the target, not a role, so it is not a routable identity by construction and
+  cannot be a hardcoded role name. Every other target — including a seat like
+  `mayor` — is pure config and must resolve through the roster like any other
+  configured agent, per the zero-hardcoded-roles invariant (AGENTS.md).
+  Whether other cross-cutting sentinels deserve `human`'s treatment is
+  unsettled, and adding one is a config question rather than a code one.
 - The gate covers the `gc bd` seam. A direct `bd` invocation that bypasses `gc`
   is not gated, by construction. Whether that seam should move is out of scope
   here.

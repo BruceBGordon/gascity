@@ -231,15 +231,10 @@ func bdRigQualifiedMetadataRefusal(cfg *config.City, bdArgs []string) (string, b
 	verb, args := bdflags.SplitGlobalFlags(bdArgs)
 	// bd registers `new` as an alias for `create` (bd create --help: "Aliases:
 	// create, new"), so the alias has to reach the same admission check AND the
-	// same flag manifest. Normalizing here covers both, because those are the
-	// only two things verb is read for. The gate alone would not: bdflags keys
-	// its manifests under the canonical verb only and performs no alias
-	// normalization, so ValueFlags("new") is nil, and an empty manifest steps
-	// over no value — the failure mode globalValueFlags' doc comment calls
-	// load-bearing.
-	if verb == "new" {
-		verb = "create"
-	}
+	// same flag manifest. bdNormalizeSubcommandAlias is the one shared place
+	// every verb reader normalizes through — see its doc comment for why a
+	// second copy of this map must not exist.
+	verb = bdNormalizeSubcommandAlias(verb)
 	if verb != "create" && verb != "update" {
 		return "", false
 	}
