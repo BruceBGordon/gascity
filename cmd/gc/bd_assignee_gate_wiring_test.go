@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/gastownhall/gascity/internal/config"
 )
 
 // gateWiringCity stands up the smallest city that reaches the assignee gate in
@@ -20,7 +22,7 @@ func gateWiringCity(t *testing.T) (ranMarker string) {
 	t.Cleanup(func() {
 		cityFlag, rigFlag, bdBeadExists = origCityFlag, origRigFlag, origProbe
 	})
-	bdBeadExists = func(_ string, _ execStoreTarget, _ string) bool { return true }
+	bdBeadExists = func(_ string, _ *config.City, _ execStoreTarget, _ string) bool { return true }
 	cityFlag, rigFlag = "", ""
 
 	cityDir := t.TempDir()
