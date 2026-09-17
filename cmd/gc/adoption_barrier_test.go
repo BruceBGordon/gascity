@@ -358,6 +358,65 @@ func TestAdoptionBarrier_AdoptedRuntimeCanLaterBeDrained(t *testing.T) {
 	}
 }
 
+// TestAdoptionBarrier_TokenlessAdoptedRuntimeCanLaterBeDrained is the
+// token-less counterpart to TestAdoptionBarrier_AdoptedRuntimeCanLaterBeDrained
+// above (round-2 exit contract on ga-lfr06j / ga-3kfb6y): a runtime adopted
+// with NO live GC_INSTANCE_TOKEN (instance_token left empty, never
+// fabricated — see TestAdoptionBarrier_TokenlessRuntimeAdoptsWithoutFabricatingToken)
+// must still be actually stoppable by a later drain-ack, not skipped forever
+// as an unverifiable mismatch. queueDrainAckAsyncStop treats an empty
+// expected token as "cannot verify" and falls through to the kill
+// (session_reconciler.go), so this proves that fall-through actually drains
+// a token-less adoptee end-to-end rather than merely asserting the fence
+// code reads that way.
+func TestAdoptionBarrier_TokenlessAdoptedRuntimeCanLaterBeDrained(t *testing.T) {
+	store := beads.NewMemStore()
+	sp := runtime.NewFake()
+	ctx := context.Background()
+	if err := sp.Start(ctx, "test-city-worker", runtime.Config{Command: "test-cmd"}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// Deliberately no SetMeta(GC_INSTANCE_TOKEN, ...): the runtime survived a
+	// supervisor restart untracked and carries no instance token at all,
+	// mirroring a pre-instance-token-era survivor.
+	cfg := &config.City{Agents: []config.Agent{{Name: "worker"}}}
+	var barrierStderr bytes.Buffer
+	clk := &clock.Fake{Time: time.Date(2026, 3, 8, 12, 0, 0, 0, time.UTC)}
+
+	// Supervisor restart: adoption barrier discovers and adopts the
+	// untracked, token-less survivor.
+	result, passed := runAdoptionBarrier("", sessionFrontDoor(store), sp, cfg, "test-city", clk, &barrierStderr, false)
+	if !passed || result.Adopted != 1 {
+		t.Fatalf("adoption failed: passed=%v adopted=%d stderr=%s", passed, result.Adopted, barrierStderr.String())
+	}
+
+	beadList, _ := store.ListByLabel(sessionBeadLabel, 0)
+	if len(beadList) != 1 {
+		t.Fatalf("beads count = %d, want 1", len(beadList))
+	}
+	adoptedToken := beadList[0].Metadata["instance_token"]
+	if adoptedToken != "" {
+		t.Fatalf("adoptedToken = %q, want empty (token-less adoption must not fabricate one)", adoptedToken)
+	}
+
+	// Reconciler later decides to drain the adopted bead. This must actually
+	// stop the still-running token-less runtime, not skip it forever as an
+	// unverifiable mismatch.
+	tracker := &asyncStartTracker{}
+	var drainStderr synchronizedBuffer
+	queueDrainAckAsyncStop("", store, sp, &config.City{}, beadList[0].ID, "test-city-worker", adoptedToken, nil, tracker, &drainStderr)
+	if !tracker.wait(time.Second) {
+		t.Fatal("async drain-ack stop did not complete")
+	}
+
+	if sp.IsRunning("test-city-worker") {
+		t.Fatal("token-less adopted runtime was never stopped — drain-ack skipped it forever (round-2 gap on ga-lfr06j)")
+	}
+	if got := drainStderr.String(); strings.Contains(got, "instance token mismatch") {
+		t.Fatalf("drain stderr = %q, unexpected token mismatch for a token-less adoptee (empty must mean cannot-verify, not skip)", got)
+	}
+}
+
 func TestAdoptionBarrier_SkipsExistingBead(t *testing.T) {
 	store := beads.NewMemStore()
 	// Pre-create a bead for mayor.
