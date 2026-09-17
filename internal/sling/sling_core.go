@@ -625,6 +625,15 @@ func attachFormulaToBead(opts SlingOpts, deps SlingDeps, querier BeadQuerier, be
 			// still gets set. A workflow conflict or metadata-clear error is
 			// not this specific error class and keeps hard-failing above.
 			result.BeadWarnings = append(result.BeadWarnings, fmt.Sprintf("skipped attaching %s %q on %s: %v; routed as a plain bead instead", errLabel, formulaName, beadID, molErr))
+			// The fallback above only warns about the molecule conflict. If the
+			// bead is also still assigned to someone other than this sling's
+			// target, plain routing sets gc.routed_to but nothing the target
+			// queries (bd ready, a wisp) can ever reach it: the hand-off is
+			// undeliverable, not merely downgraded. Surface that distinctly
+			// (gm-2kyaqy) instead of reporting unqualified success.
+			if holder, gerr := querier.Get(beadID); gerr == nil && holder.Assignee != "" && holder.Assignee != a.QualifiedName() {
+				result.BeadWarnings = append(result.BeadWarnings, fmt.Sprintf("bead %s is still assigned to %q and undeliverable to %s: will not be picked up while %s %s remains attached", beadID, holder.Assignee, a.QualifiedName(), molErr.Label, molErr.AttachmentID))
+			}
 			return finalize(opts, deps, beadID, "bead", result)
 		}
 		return result, fmt.Errorf("%w", err)
