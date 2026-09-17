@@ -72,11 +72,12 @@ var specs = []Spec{
 		Owner:          Owner{Bead: "ga-o3ko1j", GitHub: "@gastownhall/gascity-admin"},
 		Expires:        "2027-01-15",
 		VersionAnchor:  "GC_DEMAND_STRANDED_ROUTE_MIN_VERSION",
-		SelectsBetween: [2]string{"silently strand routed-but-unwakeable min=0 demand", "surface it via a warning or failure event"},
+		SelectsBetween: [2]string{"silently strand routed-but-unwakeable demand", "surface it via a warning or failure event"},
 		Justification: "Adopt fail-loud detection for gc.routed_to demand that no session can " +
-			"ever satisfy (a dead or misspelled route target with min_active_sessions=0), so an " +
-			"operator sees a warning event by default and can flip to a hard failure once the " +
-			"detector has proven itself across the fleet.",
+			"ever satisfy (a dead or misspelled route target, or an agent that is suspended or " +
+			"cannot support a generic ephemeral session), so an operator sees a warning event " +
+			"by default and can flip to a hard failure once the detector has proven itself " +
+			"across the fleet.",
 	},
 }
 

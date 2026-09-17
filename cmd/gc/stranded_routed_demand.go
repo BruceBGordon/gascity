@@ -49,9 +49,11 @@ type routedDemandStrandedSignal struct {
 }
 
 // detectStrandedRoutedDemand scans for gc.routed_to demand beads whose
-// resolved template no session can ever wake for (FR-4/FR-5/FR-6): a
-// dead/misspelled route, or an agent whose effective min_active_sessions is 0
-// with zero sessions currently open. Candidates are ordinary ready work beads
+// resolved template no session can ever wake for (FR-4/FR-5/FR-6): the
+// template resolves to no configured agent (dead/misspelled route), the
+// agent is suspended, or the agent cannot support a generic ephemeral
+// session to service the route — and no session is presently open for it.
+// Candidates are ordinary ready work beads
 // (sling-style, direct-metadata, graph.v2 drain-unit members) plus the one
 // additive exception readyExcludeTypes normally hides: order-dispatch
 // pool-demand molecule/wisp beads carrying poolDemandWispMetadataKey.

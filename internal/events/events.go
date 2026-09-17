@@ -377,11 +377,13 @@ const (
 
 	// RoutedDemandStranded fires when a gc.routed_to demand target (a ready
 	// work bead or an order-dispatch pool-demand wisp) resolves to a template
-	// no session can ever wake for — a dead/misspelled route, or an agent
-	// whose effective min_active_sessions is 0 with zero sessions currently
-	// open. Gated by the demand.stranded_route_policy rollout gate: Auto
-	// emits with severity=warning and never blocks; Require emits with
-	// severity=failure and also fails the owning order run.
+	// no session can ever wake for — the template resolves to no configured
+	// agent (dead/misspelled route), the agent is suspended, or the agent
+	// cannot support a generic ephemeral session — and no session is
+	// presently open for it. Gated by the demand.stranded_route_policy
+	// rollout gate: Auto emits with severity=warning and never blocks;
+	// Require emits with severity=failure and also fails the owning order
+	// run.
 	RoutedDemandStranded = "routed_demand.stranded"
 
 	// Storage-class binding outcomes. Emitted once per controller boot by the

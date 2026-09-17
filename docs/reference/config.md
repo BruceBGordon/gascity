@@ -374,7 +374,7 @@ DaemonConfig holds controller daemon settings.
 
 ## DemandConfig
 
-DemandConfig configures stranded routed-demand detection: a gc.routed_to target with min_active_sessions=0 and no session that can ever wake it (dead or misspelled route).
+DemandConfig configures stranded routed-demand detection: a gc.routed_to target that resolves to no configured agent (dead or misspelled route), or to an agent that is suspended or cannot support a generic ephemeral session — and no session is presently open for it.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
