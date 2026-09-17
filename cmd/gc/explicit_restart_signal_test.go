@@ -108,7 +108,7 @@ func TestExplicitRestartCommandsPokeControllerWithoutPeriodicTick(t *testing.T) 
 		{
 			name: "self handoff",
 			run: func(stdout, stderr *bytes.Buffer) int {
-				return cmdHandoff([]string{"context cycle", "resume from the durable brief"}, "", false, "", stdout, stderr)
+				return cmdHandoffWithForce([]string{"context cycle", "resume from the durable brief"}, "", false, "", false, stdout, stderr)
 			},
 		},
 	}
