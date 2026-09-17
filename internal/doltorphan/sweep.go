@@ -187,11 +187,24 @@ func hasSentinel(dir string) bool {
 // findDoltStoreDir searches for a directory literally named ".dolt" within
 // depth levels of dir (dir's direct children are depth 1) and, if found,
 // returns the path of the directory that directly contains it — the actual
-// Dolt store root, which is dir itself only when the marker sits at depth
-// 1. This is the removal target: deleting only this path, rather than the
-// top-level candidate dir, is what keeps a container's unrelated siblings
-// intact when it legitimately holds other payload alongside an abandoned
-// Dolt copy nested deeper within it.
+// Dolt store root. This is the removal target: deleting only this path,
+// rather than the top-level candidate dir, is what keeps a container's
+// unrelated siblings intact when it legitimately holds other payload
+// alongside an abandoned Dolt copy nested deeper within it.
+//
+// A subtree can contain more than one .dolt marker at different depths: a
+// `dolt sql-server --data-dir <dir>` writes its own server-bookkeeping
+// marker directly at <dir>/.dolt (holding tmp/ and sql-server.info),
+// distinct from a database's own store marker nested inside it (e.g.
+// <dir>/<db>/.dolt, created by `dolt init`). Since os.ReadDir returns
+// entries in lexical order and ".dolt" sorts before most other names, a
+// naive first-match search hits the shallow bookkeeping marker before ever
+// looking inside the sibling that holds the real, deeper store — which
+// makes Sweep delete the whole top-level container instead of just the
+// abandoned store nested within it. To avoid that, this function always
+// prefers the deepest match: it fully explores every subdirectory before
+// falling back to treating dir itself as the store when dir directly
+// contains a marker.
 func findDoltStoreDir(dir string, depth int) (string, bool) {
 	if depth <= 0 {
 		return "", false
@@ -200,16 +213,21 @@ func findDoltStoreDir(dir string, depth int) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+	selfIsStore := false
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
 		if e.Name() == ".dolt" {
-			return dir, true
+			selfIsStore = true
+			continue
 		}
 		if store, ok := findDoltStoreDir(filepath.Join(dir, e.Name()), depth-1); ok {
 			return store, true
 		}
+	}
+	if selfIsStore {
+		return dir, true
 	}
 	return "", false
 }
