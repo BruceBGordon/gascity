@@ -425,10 +425,18 @@ func doBd(args []string, stdout, stderr io.Writer) int {
 	// cwd) is resolved inside resolveBdScopeTarget and deliberately does not
 	// travel — see refuseRigScopedClassOwnedTarget.
 	//
-	// The assignee gate runs before this by-ID door, not just before the
-	// forwarded-subprocess path below: maybeRouteBdByID writes the assignee
-	// in process (cmd_bd_by_id.go, serveBdByIDResolved), so a refusal placed
-	// only after it would run after the write it exists to prevent.
+	// The assignee gate runs here, before this by-ID door, and nowhere else:
+	// maybeRouteBdByID writes the assignee in process (cmd_bd_by_id.go,
+	// serveBdByIDResolved), so a refusal placed only after it would run after
+	// the write it exists to prevent. This position also covers every later
+	// door by construction. It precedes the exact-ID guard below, whose
+	// store.Get can fall back to shelling out to the real bd binary
+	// (native-store-unavailable fallback) — a refusal must precede that side
+	// effect, not merely precede the forwarded mutation — and it precedes the
+	// forwarded bd subprocess further down. The gate is a pure check over cfg
+	// and bdArgs with no store access, and neither is reassigned between here
+	// and those doors, so a second call site could only repeat this verdict
+	// (and repeat its empty-roster warning).
 	if !assigneeGateBypassed() {
 		if err := checkBdAssigneeArgs(cfg, bdArgs, stderr); err != nil {
 			fmt.Fprintf(stderr, "gc bd: %v\n", err) //nolint:errcheck // best-effort stderr
@@ -471,18 +479,6 @@ func doBd(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "  hint: %s\n", hint) //nolint:errcheck // best-effort stderr
 		}
 		return 1
-	}
-
-	// The assignee gate runs before the exact-ID guard below: it is a pure
-	// config check with no store access, and the guard's store.Get can fall
-	// back to shelling out to the real bd binary (native-store-unavailable
-	// fallback) — a refusal here must precede that, not merely precede the
-	// forwarded mutation.
-	if !assigneeGateBypassed() {
-		if err := checkBdAssigneeArgs(cfg, bdArgs, stderr); err != nil {
-			fmt.Fprintf(stderr, "gc bd: %v\n", err) //nolint:errcheck // best-effort stderr
-			return 1
-		}
 	}
 
 	// Pre-flight exact-ID guard for write-mutating subcommands (gcy-g4o).
@@ -554,13 +550,6 @@ func doBd(args []string, stdout, stderr io.Writer) int {
 	}
 
 	reapStaleBdExportJSONL(target.ScopeRoot)
-
-	if !assigneeGateBypassed() {
-		if err := checkBdAssigneeArgs(cfg, bdArgs, stderr); err != nil {
-			fmt.Fprintf(stderr, "gc bd: %v\n", err) //nolint:errcheck // best-effort stderr
-			return 1
-		}
-	}
 
 	warnExternalBdOverrideDrift(stderr, cityPath, target)
 

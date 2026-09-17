@@ -48,7 +48,9 @@ func checkBdAssigneeArgs(cfg *config.City, args []string, stderr io.Writer) erro
 	if roster.Empty() {
 		// Refusing every write because the config did not expand would be a
 		// worse failure than the one being prevented. Say so and allow it.
-		fmt.Fprintf(stderr, "gc bd: warning: no agents or named sessions resolved from config; assignee not checked\n") //nolint:errcheck
+		if stderr != nil {
+			fmt.Fprintf(stderr, "gc bd: warning: no agents or named sessions resolved from config; assignee not checked\n") //nolint:errcheck
+		}
 		return nil
 	}
 	var bad []string
@@ -70,9 +72,10 @@ func checkBdAssigneeArgs(cfg *config.City, args []string, stderr io.Writer) erro
 // the assignee field. On "list" and "ready" the same flag is a read-only
 // filter (bd list --help: "-a, --assignee string  Filter by assignee"; see
 // internal/bdflags valueFlagsBySub["list"/"ready"]), and refusing those
-// refuses the exact investigation this gate exists to enable. Sourced from
-// bdflags' own per-subcommand manifest rather than hand-picked, so this set
-// cannot drift from what bd actually accepts as a write.
+// refuses the exact investigation this gate exists to enable. This set is
+// hand-maintained and must stay in sync with the verbs bdflags declares
+// --assignee on: create, update and mol pour write it; list and ready filter
+// on it.
 var assigneeWriteSubcommands = map[string]bool{
 	"create":   true,
 	"update":   true,
