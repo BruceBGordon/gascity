@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -341,7 +342,72 @@ func collectCityStatusSnapshotFromStoreSnapshot(
 		})
 	}
 
+	snapshot.Orders = collectCityStatusOrders(cfg, cityPath)
+
 	return snapshot
+}
+
+// orderSuppressionEventTailLimit bounds how far back collectCityStatusOrders
+// scans events.jsonl for events.OrderSuppressed. Mirrors internal/doctor's
+// own orderFiringEventTailLimit (unexported, so not reusable directly): far
+// enough back to catch an active suppression streak without scanning the
+// whole log on a long-lived city.
+const orderSuppressionEventTailLimit = 2000
+
+// collectCityStatusOrders gathers the unhealthy-order signals gc status
+// surfaces without requiring gc doctor: the firing- and outcome-health
+// checks doctor already runs, copied straight from their own CheckResult so
+// the two commands can never disagree, plus the current open-work gate
+// suppression state (events.OrderSuppressed), which neither doctor check
+// reads.
+func collectCityStatusOrders(cfg *config.City, cityPath string) []cityStatusOrder {
+	var result []cityStatusOrder
+
+	checkCtx := &doctor.CheckContext{CityPath: cityPath}
+	for _, r := range []*doctor.CheckResult{
+		doctor.NewOrderFiringCurrentCheck(cfg, cityPath).Run(checkCtx),
+		doctor.NewOrderOutcomeHealthyCheck(cfg, cityPath).Run(checkCtx),
+	} {
+		if r.Status == doctor.StatusOK {
+			continue
+		}
+		result = append(result, cityStatusOrder{
+			Name:     r.Name,
+			Status:   r.Status,
+			Severity: r.Severity,
+			Message:  r.Message,
+		})
+	}
+
+	// Tail-read events.jsonl for OrderSuppressed events and keep only the
+	// most recent one per order name: the gate re-emits this event on every
+	// suppressed dispatch tick, so a live-stuck order can appear many times
+	// in the tail window and only its latest Consecutive/FirstSuppressed
+	// values reflect the current suppression state.
+	eventsPath := filepath.Join(cityPath, ".gc", "events.jsonl")
+	suppressed, _ := events.ReadFilteredTail(eventsPath, events.Filter{Type: events.OrderSuppressed}, orderSuppressionEventTailLimit)
+	var suppressedRows []cityStatusOrder
+	suppressedIndex := make(map[string]int)
+	for _, e := range suppressed {
+		var payload events.OrderSuppressedPayload
+		if err := json.Unmarshal(e.Payload, &payload); err != nil {
+			continue
+		}
+		row := cityStatusOrder{
+			Name:            payload.OrderName,
+			Consecutive:     payload.Consecutive,
+			FirstSuppressed: payload.FirstSuppressed,
+			Message:         e.Message,
+		}
+		if idx, ok := suppressedIndex[payload.OrderName]; ok {
+			suppressedRows[idx] = row
+		} else {
+			suppressedIndex[payload.OrderName] = len(suppressedRows)
+			suppressedRows = append(suppressedRows, row)
+		}
+	}
+
+	return append(result, suppressedRows...)
 }
 
 func namedSessionStatusForCity(
@@ -632,6 +698,14 @@ func renderCityStatusText(snapshot cityStatusSnapshot, dops drainOps, stdout io.
 		fmt.Fprintln(stdout, "Named sessions:")
 		for _, named := range snapshot.NamedSessions {
 			fmt.Fprintf(stdout, "  %-24s%s (%s)\n", named.Identity, named.Status, named.Mode) //nolint:errcheck // best-effort stdout
+		}
+	}
+
+	if len(snapshot.Orders) > 0 {
+		fmt.Fprintln(stdout) //nolint:errcheck // best-effort stdout
+		fmt.Fprintln(stdout, "Orders:")
+		for _, order := range snapshot.Orders {
+			fmt.Fprintf(stdout, "  %-24s%s\n", order.Name, order.Message) //nolint:errcheck // best-effort stdout
 		}
 	}
 
