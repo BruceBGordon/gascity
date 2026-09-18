@@ -966,6 +966,7 @@ func buildDesiredStateWithSessionBeadsAt(
 			sessionBeads.OpenInfos(),
 			scaleCheckCounts,
 			scaleCheckDemandByTemplate,
+			nil,
 			poolDecisionTime,
 			trace,
 		)

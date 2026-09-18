@@ -1143,6 +1143,64 @@ func TestComputePoolDesiredStates_OpenAssignedWorkResumes(t *testing.T) {
 	}
 }
 
+// Regression: an open+assigned work bead whose upstream readiness is known
+// and false (e.g. blocked on an unresolved dependency) must NOT resume its
+// session. Without this gate, the resume tier kept a session alive for a
+// bead it could not actually act on yet, because only status ("open") was
+// checked, never readiness (ga-b630bn.1). readyAssigned is index-aligned to
+// the work slice, mirroring how workBeadHasAwakeDemand gates the "open" case
+// on the awake bridge.
+func TestComputePoolDesiredStates_OpenAssignedWorkNotReadyDoesNotResume(t *testing.T) {
+	cfg := &config.City{
+		Agents: []config.Agent{poolAgent("claude", "", intPtr(5), 0)},
+	}
+	work := []beads.Bead{
+		workBead("w1", "claude", "sess-1", "open", 5),
+	}
+	sessions := []beads.Bead{sessionBead("sess-1", "open")}
+
+	result := ComputePoolDesiredStatesWithDemandTracedAt(
+		cfg, work, sessionInfosFromBeads(sessions), nil, nil,
+		[]bool{false}, time.Time{}, nil,
+	)
+
+	if len(result) != 1 {
+		t.Fatalf("len(result) = %d, want 1", len(result))
+	}
+	if len(result[0].Requests) != 0 {
+		t.Fatalf("expected 0 requests for not-ready open work, got %#v", result[0].Requests)
+	}
+}
+
+// Positive control for TestComputePoolDesiredStates_OpenAssignedWorkNotReadyDoesNotResume:
+// the same open+assigned bead resumes once readiness is confirmed true,
+// proving the gate discriminates on the supplied flag rather than always
+// skipping open work when readAssigned data is present.
+func TestComputePoolDesiredStates_OpenAssignedWorkReadyResumes(t *testing.T) {
+	cfg := &config.City{
+		Agents: []config.Agent{poolAgent("claude", "", intPtr(5), 0)},
+	}
+	work := []beads.Bead{
+		workBead("w1", "claude", "sess-1", "open", 5),
+	}
+	sessions := []beads.Bead{sessionBead("sess-1", "open")}
+
+	result := ComputePoolDesiredStatesWithDemandTracedAt(
+		cfg, work, sessionInfosFromBeads(sessions), nil, nil,
+		[]bool{true}, time.Time{}, nil,
+	)
+
+	if len(result) != 1 || len(result[0].Requests) != 1 {
+		t.Fatalf("expected 1 request, got %#v", result)
+	}
+	if result[0].Requests[0].Tier != "resume" {
+		t.Fatalf("tier = %q, want resume", result[0].Requests[0].Tier)
+	}
+	if result[0].Requests[0].SessionBeadID != "sess-1" {
+		t.Fatalf("session = %q, want sess-1", result[0].Requests[0].SessionBeadID)
+	}
+}
+
 // --- Regression tests: these define the consolidated demand behavior ---
 
 // Regression: resume preserves assigned session even when scale_check is 0.
@@ -1896,6 +1954,7 @@ func TestComputePoolDesiredStates_PostCreateProtectionBindingPreservesScaleDeman
 		sessionInfosFromBeads([]beads.Bead{protected}),
 		map[string]int{"claude": 1},
 		demand,
+		nil,
 		now,
 		nil,
 	)
@@ -1931,6 +1990,7 @@ func TestComputePoolDesiredStates_PostCreateProtectionAdvancesDemandIndex(t *tes
 		sessionInfosFromBeads([]beads.Bead{protected}),
 		map[string]int{"claude": 2},
 		demand,
+		nil,
 		now,
 		nil,
 	)
@@ -1978,6 +2038,7 @@ func TestComputePoolDesiredStates_PostCreateProtectionAllocatesDemandByTriggerId
 		sessionInfosFromBeads([]beads.Bead{protected}),
 		map[string]int{"claude": 2},
 		demand,
+		nil,
 		now,
 		nil,
 	)
@@ -2035,6 +2096,7 @@ func TestComputePoolDesiredStates_PostCreateProtectionRebindsUnmatchedConcreteDe
 				sessionInfosFromBeads([]beads.Bead{protected}),
 				map[string]int{"claude": 2},
 				demand,
+				nil,
 				now,
 				nil,
 			)

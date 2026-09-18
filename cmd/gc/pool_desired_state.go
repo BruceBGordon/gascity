@@ -238,7 +238,7 @@ func ComputePoolDesiredStatesAt(
 	scaleCheckCounts map[string]int,
 	decisionTime time.Time,
 ) []PoolDesiredState {
-	return computePoolDesiredStatesAt(cfg, assignedWorkBeads, sessionInfos, scaleCheckCounts, nil, decisionTime, nil)
+	return computePoolDesiredStatesAt(cfg, assignedWorkBeads, sessionInfos, scaleCheckCounts, nil, nil, decisionTime, nil)
 }
 
 func ComputePoolDesiredStatesTraced(
@@ -261,7 +261,7 @@ func ComputePoolDesiredStatesTracedAt(
 	decisionTime time.Time,
 	trace *sessionReconcilerTraceCycle,
 ) []PoolDesiredState {
-	return computePoolDesiredStatesAt(cfg, assignedWorkBeads, sessionInfos, scaleCheckCounts, nil, decisionTime, trace)
+	return computePoolDesiredStatesAt(cfg, assignedWorkBeads, sessionInfos, scaleCheckCounts, nil, nil, decisionTime, trace)
 }
 
 func ComputePoolDesiredStatesWithDemandTraced(
@@ -277,16 +277,21 @@ func ComputePoolDesiredStatesWithDemandTraced(
 
 // ComputePoolDesiredStatesWithDemandTracedAt computes traced pool demand at a
 // caller-supplied decision time while preserving per-work demand provenance.
+// readyAssigned, when non-nil, is index-aligned to assignedWorkBeads and
+// reports whether each bead's upstream readiness has been confirmed; nil
+// preserves the historical fail-open behavior for callers with no readiness
+// data available.
 func ComputePoolDesiredStatesWithDemandTracedAt(
 	cfg *config.City,
 	assignedWorkBeads []beads.Bead,
 	sessionInfos []sessionpkg.Info,
 	scaleCheckCounts map[string]int,
 	scaleCheckDemand map[string]scaleCheckDemand,
+	readyAssigned []bool,
 	decisionTime time.Time,
 	trace *sessionReconcilerTraceCycle,
 ) []PoolDesiredState {
-	return computePoolDesiredStatesAt(cfg, assignedWorkBeads, sessionInfos, scaleCheckCounts, scaleCheckDemand, decisionTime, trace)
+	return computePoolDesiredStatesAt(cfg, assignedWorkBeads, sessionInfos, scaleCheckCounts, scaleCheckDemand, readyAssigned, decisionTime, trace)
 }
 
 func computePoolDesiredStates(
@@ -297,7 +302,7 @@ func computePoolDesiredStates(
 	scaleCheckDemand map[string]scaleCheckDemand,
 	trace *sessionReconcilerTraceCycle,
 ) []PoolDesiredState {
-	return computePoolDesiredStatesAt(cfg, assignedWorkBeads, sessionInfos, scaleCheckCounts, scaleCheckDemand, time.Time{}, trace)
+	return computePoolDesiredStatesAt(cfg, assignedWorkBeads, sessionInfos, scaleCheckCounts, scaleCheckDemand, nil, time.Time{}, trace)
 }
 
 func computePoolDesiredStatesAt(
@@ -306,6 +311,7 @@ func computePoolDesiredStatesAt(
 	sessionInfos []sessionpkg.Info,
 	scaleCheckCounts map[string]int,
 	scaleCheckDemand map[string]scaleCheckDemand,
+	_ []bool, // readyAssigned: wired into the resume-tier gate in GREEN
 	decisionTime time.Time,
 	trace *sessionReconcilerTraceCycle,
 ) []PoolDesiredState {
