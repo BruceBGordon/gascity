@@ -13,6 +13,7 @@ import (
 	"github.com/gastownhall/gascity/internal/api"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/doctor"
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/runtime"
@@ -71,6 +72,7 @@ type cityStatusSnapshot struct {
 	Agents            []cityStatusAgentRow
 	Rigs              []StatusRigJSON
 	NamedSessions     []cityStatusNamedSession
+	Orders            []cityStatusOrder
 	Partial           bool
 	PartialErrors     []string
 	Summary           StatusSummaryJSON
@@ -88,6 +90,22 @@ type cityStatusNamedSession struct {
 	Identity string
 	Status   string
 	Mode     string
+}
+
+// cityStatusOrder is one unhealthy order signal surfaced in gc status
+// without requiring gc doctor. Two distinct sources populate it: a firing- or
+// outcome-unhealthy order copies Name/Status/Severity/Message straight from
+// that doctor check's own CheckResult (Consecutive/FirstSuppressed left
+// zero), while a gate-suppressed order sets Name/Consecutive/FirstSuppressed
+// from its events.OrderSuppressedPayload and synthesizes Message, since no
+// doctor check reads that event type.
+type cityStatusOrder struct {
+	Name            string
+	Status          doctor.CheckStatus
+	Severity        doctor.CheckSeverity
+	Message         string
+	Consecutive     int
+	FirstSuppressed string
 }
 
 type rigStatusCounts struct {
