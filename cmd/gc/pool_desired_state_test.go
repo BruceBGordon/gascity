@@ -1164,11 +1164,12 @@ func TestComputePoolDesiredStates_OpenAssignedWorkNotReadyDoesNotResume(t *testi
 		[]bool{false}, time.Time{}, nil,
 	)
 
-	if len(result) != 1 {
-		t.Fatalf("len(result) = %d, want 1", len(result))
-	}
-	if len(result[0].Requests) != 0 {
-		t.Fatalf("expected 0 requests for not-ready open work, got %#v", result[0].Requests)
+	// No template ends up with any accepted request (no scale-check demand,
+	// no min-active floor), so applyNestedCaps emits no entry at all —
+	// matching the same zero-demand shape as
+	// TestComputePoolDesiredStates_InFlightDemandRecordsTraceWhenCapsSuppressReuse.
+	if len(result) != 0 {
+		t.Fatalf("result = %#v, want no desired state for not-ready open work", result)
 	}
 }
 
