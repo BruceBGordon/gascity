@@ -365,10 +365,11 @@ func TestResolveTemplatePopulatesOperatorEnvFromOperatorAuthoredLayers(t *testin
 	}
 
 	want := map[string]string{
-		"WORKSPACE_VAR": "from-workspace",
-		"PROVIDER_VAR":  "from-provider",
-		"AGENT_VAR":     "from-agent",
-		"OVERRIDE_VAR":  "agent-value", // agent layer wins, same order as the Env merge.
+		"WORKSPACE_VAR":         "from-workspace",
+		"PROVIDER_VAR":          "from-provider",
+		"AGENT_VAR":             "from-agent",
+		"OVERRIDE_VAR":          "agent-value", // agent layer wins, same order as the Env merge.
+		convergence.TokenEnvVar: "",            // pinned empty by ScrubTokenEnv, same as Env.
 	}
 	if !maps.Equal(tp.OperatorEnv, want) {
 		t.Errorf("OperatorEnv = %#v, want exactly %#v", tp.OperatorEnv, want)
@@ -440,6 +441,7 @@ func TestResolveTemplatePopulatesOperatorEnvWithExplicitProviderSelection(t *tes
 	want := map[string]string{
 		"WORKSPACE_VAR":         "from-workspace",
 		"EXPLICIT_PROVIDER_VAR": "from-explicit-provider",
+		convergence.TokenEnvVar: "", // pinned empty by ScrubTokenEnv, same as Env.
 	}
 	if !maps.Equal(tp.OperatorEnv, want) {
 		t.Errorf("OperatorEnv = %#v, want exactly %#v", tp.OperatorEnv, want)

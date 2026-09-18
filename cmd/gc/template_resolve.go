@@ -494,6 +494,7 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 	// agentEnv plumbing — so a resolved config env change fingerprints as
 	// Launch-tier identity instead of a no-op.
 	operatorEnv := mergeEnv(expandEnvMap(workspaceEnv), expandEnvMap(resolved.Env), expandEnvMap(cfgAgent.Env))
+	operatorEnv = convergence.ScrubTokenEnv(operatorEnv)
 
 	// Step 10b: Upstream axis (Phase C). Inject the selected upstream's serving
 	// env LAST so it is authoritative for the model-serving keys, and after
