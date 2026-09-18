@@ -445,3 +445,115 @@ func TestResolveTemplatePopulatesOperatorEnvWithExplicitProviderSelection(t *tes
 		t.Errorf("OperatorEnv = %#v, want exactly %#v", tp.OperatorEnv, want)
 	}
 }
+
+// TestResolveTemplateExcludesUpstreamCredentialFromOperatorEnv (ga-evj082
+// review round 1, uncovered criteria 2/5) asserts that the Upstream axis's
+// resolved credential is present in tp.Env but never reaches tp.OperatorEnv.
+// Step 10b (the upstream-credential injection loop, template_resolve.go)
+// runs strictly after operatorEnv is already computed and writes only into
+// env, never operatorEnv, so this holds by construction today. It is still
+// worth locking in: OperatorEnv is hashed into the Launch-tier fingerprint
+// (internal/runtime/fingerprint.go), and admitting a live upstream-serving
+// secret into that hash-preimage would be a real regression even though it
+// would change no observable session behavior.
+func TestResolveTemplateExcludesUpstreamCredentialFromOperatorEnv(t *testing.T) {
+	const apiKey = "upstream-secret-api-key"
+	cityPath := t.TempDir()
+	writeTemplateResolveCityConfig(t, cityPath, "file")
+
+	params := &agentBuildParams{
+		cityName: "city",
+		cityPath: cityPath,
+		city: &config.City{Upstreams: map[string]config.UpstreamSpec{
+			"gateway": {
+				APIKey:    apiKey,
+				APIKeyEnv: "UPSTREAM_API_KEY",
+			},
+		}},
+		workspace: &config.Workspace{
+			Provider: "test",
+			Env:      map[string]string{"WORKSPACE_VAR": "from-workspace"},
+		},
+		providers:  map[string]config.ProviderSpec{"test": {Command: "echo", PromptMode: "none"}},
+		lookPath:   func(string) (string, error) { return "/bin/echo", nil },
+		fs:         fsys.OSFS{},
+		beaconTime: time.Unix(0, 0),
+		beadNames:  make(map[string]string),
+		stderr:     io.Discard,
+	}
+	agent := &config.Agent{
+		Name:     "runner",
+		Upstream: "gateway",
+		Env:      map[string]string{"AGENT_VAR": "from-agent"},
+	}
+
+	tp, err := resolveTemplate(params, agent, agent.QualifiedName(), nil)
+	if err != nil {
+		t.Fatalf("resolveTemplate: %v", err)
+	}
+
+	if got := tp.Env["UPSTREAM_API_KEY"]; got != apiKey {
+		t.Fatalf("test invariant broken: Env[UPSTREAM_API_KEY] = %q, want %q", got, apiKey)
+	}
+	if _, ok := tp.OperatorEnv["AGENT_VAR"]; !ok {
+		t.Fatal("test invariant broken: expected operator-authored AGENT_VAR in tp.OperatorEnv")
+	}
+
+	if _, ok := tp.OperatorEnv["UPSTREAM_API_KEY"]; ok {
+		t.Errorf("OperatorEnv[UPSTREAM_API_KEY] present, want excluded (upstream credential merges in after operatorEnv is computed)")
+	}
+	for key, val := range tp.OperatorEnv {
+		if strings.Contains(val, apiKey) {
+			t.Errorf("OperatorEnv[%s] = %q carries the upstream credential", key, val)
+		}
+	}
+}
+
+// TestResolveTemplateScrubsControllerTokenFromOperatorEnv (ga-evj082 review
+// round 1 security finding, non-blocking defense-in-depth) closes the
+// asymmetry the review flagged: the main env merge pins the controller token
+// to empty via convergence.ScrubTokenEnv, but the operatorEnv merge two
+// lines below it does not, so a config-authored literal assignment of the
+// token var name (the same shape
+// TestResolveTemplateWithholdsControllerTokenFromConfigAuthoredEnv drives
+// against Env) survives into the OperatorEnv hash-preimage unpinned. Not
+// exploitable today — OperatorEnv is hash-only, never a live env overlay —
+// but pinning it keeps OperatorEnv's handling symmetric with Env and removes
+// the unguarded assumption for any future consumer.
+func TestResolveTemplateScrubsControllerTokenFromOperatorEnv(t *testing.T) {
+	cityPath := t.TempDir()
+	writeTemplateResolveCityConfig(t, cityPath, "file")
+
+	params := &agentBuildParams{
+		cityName: "city",
+		cityPath: cityPath,
+		workspace: &config.Workspace{
+			Provider: "test",
+			Env:      map[string]string{"WORKSPACE_VAR": "from-workspace"},
+		},
+		providers:  map[string]config.ProviderSpec{"test": {Command: "echo", PromptMode: "none"}},
+		lookPath:   func(string) (string, error) { return "/bin/echo", nil },
+		fs:         fsys.OSFS{},
+		beaconTime: time.Unix(0, 0),
+		beadNames:  make(map[string]string),
+		stderr:     io.Discard,
+	}
+	agent := &config.Agent{
+		Name: "runner",
+		Env: map[string]string{
+			convergence.TokenEnvVar: "agent-literal",
+		},
+	}
+
+	tp, err := resolveTemplate(params, agent, agent.QualifiedName(), nil)
+	if err != nil {
+		t.Fatalf("resolveTemplate: %v", err)
+	}
+
+	val, ok := tp.OperatorEnv[convergence.TokenEnvVar]
+	if !ok {
+		t.Errorf("OperatorEnv omits %s; want present and pinned empty, same as Env", convergence.TokenEnvVar)
+	} else if val != "" {
+		t.Errorf("OperatorEnv[%s] = %q, want empty (a config-authored literal must not survive into the fingerprint hash-preimage)", convergence.TokenEnvVar, val)
+	}
+}
